@@ -1,4 +1,5 @@
 use std::str;
+use std::sync::Arc;
 
 use nom::*;
 use data::*;
@@ -41,6 +42,68 @@ fn any_utf8(input: &[u8]) -> IResult<&[u8], char> {
     }
 }
 
+/// over_chars!(&str -> IResult<&str, O>) => &[u8] -> IResult<&[u8], O>
+/// 
+/// Transform a parser over strings to a parser over bytes.
+macro_rules! over_chars(
+    ($i:expr, $submacro:ident!( $($args:tt)* )) => ({
+        let data_: &[u8] = $i;
+        let r_: IResult<&[u8], _> = match str::from_utf8(data_) {
+            Ok(s_) => match $submacro!(s_, $($args)*) {
+                IResult::Done(x_, r_) => {
+                    // take the ending sequence
+                    let begin_ = data_.len() - x_.as_bytes().len();
+                    IResult::Done(&data_[begin_..], r_)
+                },
+                IResult::Incomplete(e_) => IResult::Incomplete(e_),
+                IResult::Error(e_) => IResult::Error(e_),
+            },
+            Err(e_) => match e_.error_len() {
+                None    => IResult::Incomplete(Needed::Size(1)),
+                Some(l) => {
+                    // try to decode a subsequence
+                    let s_ = str::from_utf8(&data_[..e_.valid_up_to()]).unwrap();
+                    match $submacro!(s_, $($args)*) {
+                        IResult::Done(x_, r_) => {
+                            // take the ending sequence
+                            let begin_ = e_.valid_up_to() - x_.as_bytes().len();
+                            IResult::Done(&data_[begin_..], r_)
+                        },
+                        IResult::Incomplete(_) =>
+                            // this is an error, since decoding further would
+                            // fail
+                            IResult::Error(ErrorKind::Custom(4)),
+                        IResult::Error(e) => IResult::Error(e)
+                    }
+                }
+            }
+        };
+        r_
+    });
+    ($i:expr, $f: expr) => (
+        over_chars!($i, call!($f));
+    );
+);
+
+/// Parse a filename or filepath
+/// 
+/// The key difference here is that everything else can be escaped
+fn filename(input: &[u8]) -> IResult<&[u8], String> {
+    unimplemented!()
+}
+
+// match any valid identifier char. identifier chars are any non-whitespace
+// character other than |, >, or parentheses
+fn is_valid_ident_char(c: char) -> bool {
+    (c.is_alphanumeric() ||
+     !(c == '|' || c == '>' || c == ')' || c == '(')) &&
+        !c.is_whitespace()
+}
+
+/// Parse an identifier
+named!(ident<Identifier>, map!(over_chars!(take_while1_s!(is_valid_ident_char)),
+                               |s| Identifier::new(s)));
+
 named!(pipe_elem<PipeMode>, alt!(
         value!(PipeMode::PipeText, tag!(b"|>")) |
         do_parse!(
@@ -49,6 +112,15 @@ named!(pipe_elem<PipeMode>, alt!(
             tag!(b">") >>
             (PipeMode::DelimitedPipe(c))) |
         value!(PipeMode::Pipe, tag!(b"|"))));
+
+named!(terminal_mode<TerminalMode>, alt!(
+        do_parse!(tag!(b">") >> f: filename >> (TerminalMode::ReplaceFile(f))) |
+        do_parse!(tag!(b">>") >> f: filename >> (TerminalMode::AppendFile(f))) |
+        do_parse!(tag!(b">=") >> v: ident >> (TerminalMode::SetVariable(v))) |
+        do_parse!(tag!(b">>=") >> v: ident >> (TerminalMode::AppendVariable(v))) |
+        do_parse!(tag!(b"<") >> f: filename >> (TerminalMode::InputFile(f))) |
+        do_parse!(tag!(b"<=") >> v: ident >> (TerminalMode::InputVar(v)))
+        ));
 
 #[cfg(test)]
 mod tests {
@@ -63,5 +135,18 @@ mod tests {
                    IResult::Done(&b" foo"[..], PipeMode::DelimitedPipe('=')));
         assert_eq!(pipe_elem("|±> foo".as_bytes()),
                    IResult::Done(&b" foo"[..], PipeMode::DelimitedPipe('±')));
+
+        // test failures
+        assert_eq!(pipe_elem("-> foo".as_bytes()), IResult::Error(ErrorKind::Alt));
+    }
+
+    #[test]
+    fn test_identifier() {
+        assert_eq!(ident(b"identifier"),
+            IResult::Done(&b""[..], Identifier::new("identifier")));
+        assert_eq!(ident(b"te/st | bar"),
+            IResult::Done(&b" | bar"[..], Identifier::new("te/st")));
+        assert_eq!(ident("te/s±t | bar".as_bytes()),
+            IResult::Done(&b" | bar"[..], Identifier::new("te/s±t")));
     }
 }
