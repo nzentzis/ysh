@@ -1,0 +1,7 @@
+[package]
+name = "ysh"
+version = "0.1.0"
+authors = ["Noah Zentzis <nzentzis@gmail.com>"]
+
+[dependencies]
+nom         = "3.2"
