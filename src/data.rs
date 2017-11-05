@@ -1,5 +1,12 @@
 use std::sync::Arc;
 
+use environment::Environment;
+
+pub enum Executable {
+    Native(Fn(&Environment, &[Value]) -> Value),
+    //Interpreted()
+}
+
 #[derive(PartialEq, Clone, Debug)]
 pub enum Value {
     Boolean(bool),
@@ -7,6 +14,7 @@ pub enum Value {
     Str(String),
     Symbol(Identifier),
     List(Vec<Value>),
+    Function(Environment, Executable)
     // function
     // polyobject
 }
