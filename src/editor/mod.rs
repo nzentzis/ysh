@@ -1,5 +1,7 @@
 pub mod basic;
 
+use std::iter::FromIterator;
+
 use input::Keymap;
 
 /// Basic trait for line-editing disciplines
@@ -10,10 +12,221 @@ pub trait LineEditor {
 
 /// Line editing structure for holding the current input buffer, cursor
 /// position, and highlighting regions
+/// 
+/// Editing buffers support the following operations:
+/// * Filtering the entire buffer contents through an arbitrary function
+/// * Moving the cursor to arbitrary locations
+/// * Inserting or deleting text at the cursor position
+/// * Retrieving the buffer contents as a `String`
+/// * Viewing the buffer contents as a character slice
+/// * Creating and deleting highlight regions
+/// 
+/// At any given time, the cursor position will point to a location in the edit
+/// buffer. Keep in mind that these locations are *not* the same as character
+/// indices:
+/// 
+///     char index: 0 1 2 3 4 5
+///                 h e l l o !
+///     cursor:    0 1 2 3 4 5 6
+/// 
+/// In other words, cursor indices refer to locations *between* characters,
+/// while character indices refer to the characters themselves. This means that
+/// cursor index 0 will always be valid, even in an empty edit buffer.
 pub struct EditBuffer {
     buf: Vec<char>,
     cursor: usize
 }
 
 impl EditBuffer {
+    /// Create a new, empty EditBuffer
+    pub fn new() -> EditBuffer {
+        EditBuffer {
+            buf: Vec::with_capacity(128),
+            cursor: 0,
+        }
+    }
+
+    /// Filter the buffer contents through a function
+    /// 
+    /// This operation is O(n) at the moment since the internal storage must be
+    /// duplicated, but later updates may improve this performance. Cursor
+    /// position will be preserved, but all highlight regions will be cleared.
+    pub fn filter_buf<F>(&mut self, func: F) where F: Fn(String) -> String {
+        unimplemented!()
+    }
+
+    /// Check whether the cursor is at the end of the buffer
+    pub fn at_end(&self) -> bool { self.cursor == (self.buf.len() + 1) }
+
+    /// Move the cursor relative to its current location
+    /// 
+    /// If the given offset would take the cursor outside the valid text region,
+    /// the motion will be clamped to the end of the valid region. This is an
+    /// O(1) operation.
+    pub fn move_cursor(&mut self, offset: isize) {
+        let new_pos =
+            if offset < 0 { self.cursor.saturating_sub((-offset) as usize) }
+            else { self.cursor.saturating_add(offset as usize) };
+        self.set_cursor(new_pos);
+    }
+
+    /// Move the cursor to an absolute position
+    ///
+    /// If the position is out of bounds, it will be clamped to the bounds of
+    /// the valid region. This is an O(1) operation.
+    pub fn set_cursor(&mut self, pos: usize) {
+        self.cursor =
+            if pos > (self.buf.len()+1) { self.buf.len()+1 }
+            else { pos };
+    }
+
+    /// Get the current cursor position
+    pub fn cursor(&self) -> usize { self.cursor }
+
+    /// Insert a string at the cursor position
+    /// 
+    /// Highlighting regions will be preserved or modified (any region which
+    /// contains the cursor position at which text is inserted will be expanded,
+    /// and those outside it will be shifted) after this operation.
+    /// 
+    /// After insertion, the cursor will be moved to the end of the inserted
+    /// string.
+    pub fn insert<S: AsRef<str>>(&mut self, text: S) {
+        let text_len = text.as_ref().chars().count();
+
+        // handle the three cases: cursor at start, cursor in middle, and cursor
+        // at end
+        if self.cursor == 0 { // beginning
+            // just prepend
+            let mut v = Vec::with_capacity(self.buf.len() + text_len);
+            v.extend(text.as_ref().chars());
+            v.append(&mut self.buf);
+            self.buf = v;
+        } else if self.at_end() { // end
+            // append into our vector
+            self.buf.reserve_exact(text_len);
+            self.buf.extend(text.as_ref().chars());
+        } else { // middle
+            // split our vector in half, append to the first, then reapply the
+            // second part
+            let mut earlier = self.buf.split_off(self.cursor);
+            earlier.reserve_exact(self.buf.len() + text_len);
+            earlier.extend(text.as_ref().chars());
+            earlier.append(&mut self.buf);
+            self.buf = earlier;
+        }
+        self.cursor += text_len;
+    }
+
+    /// Delete a number of characters before the current cursor position and
+    /// return them.
+    /// 
+    /// Highlighting regions will be preserved or modified according to the
+    /// following rules:
+    /// * Regions surrounding the deleted section will be shrunk
+    /// * Regions whose start index is in the deleted section will have it moved
+    ///   to the end of the deleted section.
+    /// * Regions whose end index is in the deleted section will have it moved
+    ///   to the start of the deleted section.
+    /// * Regions outside the deleted section will have their indices shifted to
+    ///   accomodate it.
+    /// 
+    /// After deletion, the cursor will be moved to the start of the deleted
+    /// region. If there are less than `num` chars before the cursor, then all
+    /// chars before the cursor will be deleted.
+    pub fn delete(&mut self, num: usize) -> String {
+        // cap the number of characters to delete
+        let num = num.min(self.cursor);
+
+        // avoid useless deletions at start of string
+        if num == 0 { return String::new(); }
+
+        let drain_iter = self.buf.drain((self.cursor - num)..self.cursor);
+        let res = String::from_iter(drain_iter);
+
+        self.cursor -= num;
+        res
+    }
+
+    /// Delete a number of characters after the current cursor position and
+    /// return them.
+    /// 
+    /// Highlighting regions will be preserved or modified according to the
+    /// following rules:
+    /// * Regions surrounding the deleted section will be shrunk
+    /// * Regions whose start index is in the deleted section will have it moved
+    ///   to the end of the deleted section.
+    /// * Regions whose end index is in the deleted section will have it moved
+    ///   to the start of the deleted section.
+    /// * Regions outside the deleted section will have their indices shifted to
+    ///   accomodate it.
+    /// 
+    /// After deletion, the cursor will be moved to the start of the deleted
+    /// region. If there are less than `num` chars after the cursor, then all
+    /// chars after the cursor will be deleted.
+    pub fn delete_forward(&mut self, num: usize) -> String {
+        // cap the number of characters to delete
+        let num = num.min((self.buf.len()+1) - self.cursor);
+
+        // avoid useless deletions at end of string
+        if num == 0 { return String::new(); }
+
+        let drain_iter = self.buf.drain(self.cursor..(self.cursor + num));
+        let res = String::from_iter(drain_iter);
+
+        res
+    }
+
+    /// Clear all editing state and reset the buffer to empty
+    /// 
+    /// Highlight regions and text will be deleted, and the cursor will be reset
+    /// to location 0.
+    pub fn clear(&mut self) {
+        self.buf.truncate(0);
+        self.cursor = 0;
+    }
+
+    /// Get a copy of the buffer contents
+    /// 
+    /// Note that this operation may allocate memory. For a zero-cost version
+    /// which works in many cases, use the `view` method.
+    pub fn as_string(&self) -> String {
+        String::from_iter(self.buf.iter())
+    }
+
+    /// Get a view into the buffer contents
+    pub fn view(&self) -> &[char] { self.buf.as_slice() }
+
+    /// Get a mutable view into the buffer contents
+    pub fn view_mut(&mut self) -> &mut [char] { self.buf.as_mut_slice() }
+}
+
+impl<T> From<T> for EditBuffer where T: AsRef<str> {
+    fn from(s: T) -> EditBuffer {
+        EditBuffer {
+            buf: Vec::from_iter(s.as_ref().chars()),
+            cursor: 0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_cursor() {
+        let mut b = EditBuffer::from("hello world");
+        assert_eq!(b.cursor(), 0);
+        b.set_cursor(500);
+        assert_eq!(b.cursor(), 12);
+        b.move_cursor(10);
+        assert_eq!(b.cursor(), 12);
+        b.move_cursor(-10);
+        assert_eq!(b.cursor(), 2);
+        b.move_cursor(-13);
+        assert_eq!(b.cursor(), 0);
+        b.move_cursor(4);
+        assert_eq!(b.cursor(), 4);
+    }
 }
