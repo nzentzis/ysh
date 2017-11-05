@@ -105,10 +105,10 @@ named!(quoted_string<String>, map!(over_chars!(
         |x| x.to_owned()));
 
 /// Parse a general identifier (i.e. a normal identifier or quoted string)
-named!(gen_ident<String>, ws!(alt_complete!(
+named!(gen_ident<String>, alt_complete!(
             quoted_string |
             map!(over_chars!(take_while1_s!(is_valid_ident_char)),
-                 |x| x.to_owned()))));
+                 |x| x.to_owned())));
 
 named!(pipe_elem<PipeMode>, ws!(alt_complete!(
         value!(PipeMode::PipeText, tag!(b"|>")) |
@@ -128,7 +128,12 @@ named!(terminal_mode<TerminalMode>, ws!(alt_complete!(
         do_parse!(tag!(b"<") >> f: gen_ident >> (TerminalMode::InputFile(f)))
         )));
 
-named!(value<Value>, ws!(alt_complete!(
+named!(paren_list<Vec<Value>>,
+       delimited!(tag!(b"("),
+                  separated_nonempty_list_complete!(space, value),
+                  tag!(b")")));
+
+named!(value<Value>, alt_complete!(
         map!(alt!(value!(true, tag!(b"true")) |
                   value!(false, tag!(b"false"))),
              Value::Boolean) |
@@ -140,11 +145,9 @@ named!(value<Value>, ws!(alt_complete!(
                 Value::Str(s)
             }
         }) |
-        map!(delimited!(tag!("("),
-            separated_nonempty_list_complete!(space, value), tag!(")")),
-            Value::List)
+        map!(dbg_dmp!(paren_list), Value::List)
         )
-       ));
+       );
 
 named!(transformer<Transformer>,
         // basic transformer
@@ -207,25 +210,48 @@ mod tests {
 
     #[test]
     fn test_values() {
+        // booleans
         assert_eq!(value(b"truee"),
                    IResult::Done(&b"e"[..], Value::Boolean(true)));
         assert_eq!(value(b"false "),
                    IResult::Done(&b" "[..], Value::Boolean(false)));
 
+        // strings
         assert_eq!(value(b"\"foo bar baz\""),
                    IResult::Done(&b""[..],
                                  Value::Str(String::from("foo bar baz"))));
         assert_eq!(value(b"\"foo\""),
                    IResult::Done(&b""[..], Value::Str(String::from("foo"))));
-        assert_eq!(value(b"\"foo"), IResult::Error(ErrorKind::Alt));
+        //assert_eq!(value(b"\"foo"), IResult::Error(ErrorKind::Alt));
 
+        // symbols
         assert_eq!(value(b"symbol!"),
                    IResult::Done(&b""[..],
                                  Value::Symbol(Identifier::new("symbol!"))));
         assert_eq!(value("add-±".as_bytes()),
                    IResult::Done(&b""[..],
                                  Value::Symbol(Identifier::new("add-±"))));
+        assert_eq!(value("+".as_bytes()),
+                   IResult::Done(&b""[..], Value::Symbol(Identifier::new("+"))));
 
+        // homogeneous lists
+        assert_eq!(value("(true false)".as_bytes()),
+                   IResult::Done(&b""[..], Value::List(
+                           vec![Value::Boolean(true), Value::Boolean(false)])));
+        assert_eq!(value("(\"foo\" \"test\")".as_bytes()),
+                   IResult::Done(&b""[..], Value::List(
+                           vec![Value::Str(String::from("foo")),
+                                Value::Str(String::from("test"))])));
+        assert_eq!(value("(\"foo\" \"test\")".as_bytes()),
+                   IResult::Done(&b""[..], Value::List(
+                           vec![Value::Str(String::from("foo")),
+                                Value::Str(String::from("test"))])));
+        assert_eq!(value("(+ test)".as_bytes()),
+                   IResult::Done(&b""[..], Value::List(
+                           vec![Value::Symbol(Identifier::new("+")),
+                                Value::Symbol(Identifier::new("test"))])));
+
+        // mixed list
         assert_eq!(value("(+ true \"test\")".as_bytes()),
                    IResult::Done(&b""[..], Value::List(
                            vec![Value::Symbol(Identifier::new("+")),
