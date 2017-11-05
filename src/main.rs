@@ -6,6 +6,7 @@ extern crate termion;
 mod data;
 mod input;
 mod parse;
+mod editor;
 mod environment;
 
 use environment::Environment;
@@ -22,5 +23,15 @@ fn init_environment() -> Environment {
 
 fn main() {
     let env = init_environment();
-    let mut term = input::Terminal::new();
+    let mut term = match input::Terminal::new() {
+        Ok(x)   => x,
+        Err(e)  => unimplemented!()
+    };
+
+    loop {
+        let cmd = match term.read() {
+            Ok(x)  => x,
+            Err(_) => unimplemented!()
+        };
+    }
 }

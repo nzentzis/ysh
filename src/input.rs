@@ -1,11 +1,115 @@
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io;
 
 use termion::*;
 use termion::raw::IntoRawMode;
+use termion::input::TermRead;
 
 use data::*;
 use parse::pipeline;
+use editor::LineEditor;
+use editor::basic;
+
+/// Key binding structure which can execute actions based on dynamic bindings
+pub struct Keymap {
+    binds: HashMap<event::Key, Box<Fn()>>
+}
+
+impl Keymap {
+    /// Generate a new empty keymap
+    pub fn new() -> Self {
+        Keymap { binds: HashMap::new() }
+    }
+
+    /// Check for relevant bindings and return whether anything was run
+    pub fn invoke(&self, k: &event::Key) -> bool {
+        if let Some(f) = self.binds.get(&k) {
+            f();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// TODO: implement basic terminal support
+/// Simple terminal which just reads a line
+struct BasicTerminal {
+}
+
+impl BasicTerminal {
+    fn new() -> io::Result<BasicTerminal> {
+        Ok(BasicTerminal {})
+    }
+
+    fn read(&mut self) -> io::Result<Pipeline> {
+        unimplemented!()
+    }
+}
+
+/// Nicer terminal which supports line editing and completion
+struct FancyTerminal {
+    /// Restores the terminal to its normal state when dropped
+    restorer: Option<raw::RawTerminal<io::Stdout>>,
+
+    /// I/O streams
+    input: input::Events<io::Stdin>,
+
+    /// Active keyboard bindings and editing discipline
+    keymap: Keymap,
+    editor: Box<LineEditor>
+}
+
+impl FancyTerminal {
+    /// Generate a new terminal. Fail if the term isn't a PTY.
+    fn new() -> io::Result<FancyTerminal> {
+        let raw = io::stdout().into_raw_mode()?;
+
+        let mut term = FancyTerminal {
+            restorer: Some(raw),
+            input: io::stdin().events(),
+            keymap: Keymap::new(),
+            editor: Box::new(basic::Editor::new())
+        };
+        term.editor.init_bindings(&mut term.keymap);
+
+        Ok(term)
+    }
+
+    /// Redraw the command-line prompt
+    fn redraw_prompt(&mut self) {
+    }
+
+    /// Handle a keyboard event for the entry prompt
+    fn handle_key(&mut self, key: &event::Key) {
+        // don't process a key if it's bound
+        if self.keymap.invoke(key) {
+            return;
+        }
+    }
+
+    /// Read a pipeline from the input terminal
+    fn read(&mut self) -> io::Result<Pipeline> {
+        self.redraw_prompt();
+
+        while let Some(evt) = self.input.next() {
+            match evt? {
+                event::Event::Key(key) => self.handle_key(&key),
+                event::Event::Mouse(_) => {}, // TODO: handle mouse events
+                event::Event::Unsupported(_) => {}, // TODO: handle more events
+            }
+        }
+
+        panic!()
+    }
+}
+
+/// Hold both interactive and basic terminals
+enum InternalTerminal {
+    Interactive(FancyTerminal),
+    Basic(BasicTerminal)
+}
 
 /// Abstraction for the shell's input and output streams
 /// 
@@ -15,13 +119,7 @@ use parse::pipeline;
 /// 
 /// If the shell's I/O isn't connected to a pty, it'll also detect that and
 /// disable most of the fancy UI features.
-pub struct Terminal {
-    /// Restores the terminal to its normal state when dropped
-    restorer: Option<raw::RawTerminal<io::Stdout>>,
-
-    /// I/O streams
-    input: io::Stdin,
-}
+pub struct Terminal(InternalTerminal);
 
 impl Terminal {
     /// Create a new terminal object
@@ -37,28 +135,22 @@ impl Terminal {
         let output = io::stdout();
 
         if !is_tty(&output) {
-            // disable fancy formatting
-            return Ok(Terminal {
-                restorer: None,
-                input: io::stdin()
-            });
+            BasicTerminal::new()
+                          .map(InternalTerminal::Basic)
+                          .map(Terminal)
+        } else {
+            FancyTerminal::new()
+                          .map(InternalTerminal::Interactive)
+                          .map(Terminal)
         }
 
-        let raw = output.into_raw_mode()?;
-
-        Ok(Terminal {
-            restorer: Some(raw),
-            input: io::stdin()
-        })
     }
 
-    /// Redraw the command-line prompt
-    fn redraw_prompt(&mut self) {
-    }
-
+    /// Read a pipeline from the input terminal
     pub fn read(&mut self) -> io::Result<Pipeline> {
-        self.redraw_prompt();
-
-        panic!()
+        match &mut self.0 {
+            &mut InternalTerminal::Basic(ref mut t)         => t.read(),
+            &mut InternalTerminal::Interactive(ref mut t)   => t.read(),
+        }
     }
 }
