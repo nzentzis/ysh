@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+#[derive(PartialEq, Clone, Debug)]
 pub enum Value {
     Boolean(bool),
     Number(i64), // TODO: more arithmetic tower support
     Str(String),
-    Symbol(Arc<String>),
-    Char(char),
+    Symbol(Identifier),
     List(Vec<Value>),
     // function
     // polyobject
@@ -41,24 +41,24 @@ pub enum TerminalMode {
     InputVar(Identifier), // <= name
 }
 
-pub enum Transformer {
-    Command,
-    FunctionExpr
-}
+#[derive(PartialEq, Clone, Debug)]
+pub struct Transformer(pub Vec<Value>);
 
+#[derive(PartialEq, Clone, Debug)]
 pub struct PipelineComponent {
     /// The transformer to execute in this component
-    xform: Transformer,
+    pub xform: Transformer,
 
     /// The terminating element for this component. If `None`, then this is the
     /// last part of the pipeline.
-    link: Option<PipeMode>,
+    pub link: Option<PipeMode>,
 }
 
+#[derive(PartialEq, Clone, Debug)]
 pub struct Pipeline {
     /// List of pipeline stages
-    elements: Vec<PipelineComponent>,
+    pub elements: Vec<PipelineComponent>,
 
     /// Pipeline-global routing components
-    terminals: Vec<TerminalMode>
+    pub terminals: Vec<TerminalMode>
 }

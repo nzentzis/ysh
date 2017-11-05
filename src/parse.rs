@@ -2,6 +2,8 @@ use std::str;
 use std::sync::Arc;
 
 use nom::*;
+use regex::Regex;
+
 use data::*;
 
 /// Match any valid UTF-8 code point
@@ -85,18 +87,11 @@ macro_rules! over_chars(
     );
 );
 
-/// Parse a filename or filepath
-/// 
-/// The key difference here is that everything else can be escaped
-fn filename(input: &[u8]) -> IResult<&[u8], String> {
-    unimplemented!()
-}
-
 // match any valid identifier char. identifier chars are any non-whitespace
 // character other than |, >, or parentheses
 fn is_valid_ident_char(c: char) -> bool {
     (c.is_alphanumeric() ||
-     !(c == '|' || c == '>' || c == ')' || c == '(')) &&
+     !(c == '|' || c == '>' || c == ')' || c == '(' || c == '"')) &&
         !c.is_whitespace()
 }
 
@@ -104,23 +99,67 @@ fn is_valid_ident_char(c: char) -> bool {
 named!(ident<Identifier>, map!(over_chars!(take_while1_s!(is_valid_ident_char)),
                                |s| Identifier::new(s)));
 
-named!(pipe_elem<PipeMode>, alt!(
+/// A quoted string which supports backslash escapes
+named!(quoted_string<String>, map!(over_chars!(
+        delimited!(tag_s!("\""), take_until_s!("\""), tag_s!("\""))),
+        |x| x.to_owned()));
+
+/// Parse a general identifier (i.e. a normal identifier or quoted string)
+named!(gen_ident<String>, ws!(alt_complete!(
+            quoted_string |
+            map!(over_chars!(take_while1_s!(is_valid_ident_char)),
+                 |x| x.to_owned()))));
+
+named!(pipe_elem<PipeMode>, ws!(alt_complete!(
         value!(PipeMode::PipeText, tag!(b"|>")) |
         do_parse!(
             tag!(b"|") >>
             c: any_utf8 >>
             tag!(b">") >>
             (PipeMode::DelimitedPipe(c))) |
-        value!(PipeMode::Pipe, tag!(b"|"))));
+        value!(PipeMode::Pipe, tag!(b"|")))));
 
-named!(terminal_mode<TerminalMode>, alt!(
-        do_parse!(tag!(b">") >> f: filename >> (TerminalMode::ReplaceFile(f))) |
-        do_parse!(tag!(b">>") >> f: filename >> (TerminalMode::AppendFile(f))) |
+named!(terminal_mode<TerminalMode>, ws!(alt_complete!(
         do_parse!(tag!(b">=") >> v: ident >> (TerminalMode::SetVariable(v))) |
         do_parse!(tag!(b">>=") >> v: ident >> (TerminalMode::AppendVariable(v))) |
-        do_parse!(tag!(b"<") >> f: filename >> (TerminalMode::InputFile(f))) |
-        do_parse!(tag!(b"<=") >> v: ident >> (TerminalMode::InputVar(v)))
-        ));
+        do_parse!(tag!(b">") >> f: gen_ident >> (TerminalMode::ReplaceFile(f))) |
+        do_parse!(tag!(b">>") >> f: gen_ident >> (TerminalMode::AppendFile(f))) |
+        do_parse!(tag!(b"<=") >> v: ident >> (TerminalMode::InputVar(v))) |
+        do_parse!(tag!(b"<") >> f: gen_ident >> (TerminalMode::InputFile(f)))
+        )));
+
+named!(value<Value>, ws!(alt_complete!(
+        map!(alt!(value!(true, tag!(b"true")) |
+                  value!(false, tag!(b"false"))),
+             Value::Boolean) |
+        map!(quoted_string, Value::Str) |
+        map!(gen_ident, |s| {
+            if s.chars().all(is_valid_ident_char) {
+                Value::Symbol(Identifier::from(s))
+            } else {
+                Value::Str(s)
+            }
+        }) |
+        map!(delimited!(tag!("("),
+            separated_nonempty_list_complete!(space, value), tag!(")")),
+            Value::List)
+        )
+       ));
+
+named!(transformer<Transformer>,
+        // basic transformer
+        map!(separated_nonempty_list_complete!(space, value), Transformer));
+
+named!(pub pipeline<Pipeline>,
+       ws!(do_parse!(
+           base: many0!(complete!(do_parse!(xform: transformer >> link: pipe_elem >>
+                                  (PipelineComponent {xform, link: Some(link)})))) >>
+           last: map!(transformer, |x| PipelineComponent {xform: x, link: None}) >>
+           terms: separated_list_complete!(space, terminal_mode) >>
+           ({
+               let mut base = base;
+               base.push(last);
+               Pipeline { elements: base, terminals: terms } }))));
 
 #[cfg(test)]
 mod tests {
@@ -129,12 +168,12 @@ mod tests {
 
     #[test]
     fn test_pipe_elem() {
-        assert_eq!(pipe_elem(b"| foo"), IResult::Done(&b" foo"[..], PipeMode::Pipe));
-        assert_eq!(pipe_elem(b"|> foo"), IResult::Done(&b" foo"[..], PipeMode::PipeText));
+        assert_eq!(pipe_elem(b"| foo"), IResult::Done(&b"foo"[..], PipeMode::Pipe));
+        assert_eq!(pipe_elem(b"|> foo"), IResult::Done(&b"foo"[..], PipeMode::PipeText));
         assert_eq!(pipe_elem(b"|=> foo"),
-                   IResult::Done(&b" foo"[..], PipeMode::DelimitedPipe('=')));
+                   IResult::Done(&b"foo"[..], PipeMode::DelimitedPipe('=')));
         assert_eq!(pipe_elem("|±> foo".as_bytes()),
-                   IResult::Done(&b" foo"[..], PipeMode::DelimitedPipe('±')));
+                   IResult::Done(&b"foo"[..], PipeMode::DelimitedPipe('±')));
 
         // test failures
         assert_eq!(pipe_elem("-> foo".as_bytes()), IResult::Error(ErrorKind::Alt));
@@ -148,5 +187,96 @@ mod tests {
             IResult::Done(&b" | bar"[..], Identifier::new("te/st")));
         assert_eq!(ident("te/s±t | bar".as_bytes()),
             IResult::Done(&b" | bar"[..], Identifier::new("te/s±t")));
+    }
+
+    #[test]
+    fn test_terminal_modes() {
+        assert_eq!(terminal_mode(b">foo"),
+                   IResult::Done(&b""[..], TerminalMode::ReplaceFile(String::from("foo"))));
+        assert_eq!(terminal_mode(b">>foo"),
+                   IResult::Done(&b""[..], TerminalMode::AppendFile(String::from("foo"))));
+        assert_eq!(terminal_mode(b">=ident"),
+                   IResult::Done(&b""[..], TerminalMode::SetVariable(Identifier::new("ident"))));
+        assert_eq!(terminal_mode(b">>=ident"),
+                   IResult::Done(&b""[..], TerminalMode::AppendVariable(Identifier::new("ident"))));
+        assert_eq!(terminal_mode(b"<file"),
+                   IResult::Done(&b""[..], TerminalMode::InputFile(String::from("file"))));
+        assert_eq!(terminal_mode(b"<=name"),
+                   IResult::Done(&b""[..], TerminalMode::InputVar(Identifier::new("name"))));
+    }
+
+    #[test]
+    fn test_values() {
+        assert_eq!(value(b"truee"),
+                   IResult::Done(&b"e"[..], Value::Boolean(true)));
+        assert_eq!(value(b"false "),
+                   IResult::Done(&b" "[..], Value::Boolean(false)));
+
+        assert_eq!(value(b"\"foo bar baz\""),
+                   IResult::Done(&b""[..],
+                                 Value::Str(String::from("foo bar baz"))));
+        assert_eq!(value(b"\"foo\""),
+                   IResult::Done(&b""[..], Value::Str(String::from("foo"))));
+        assert_eq!(value(b"\"foo"), IResult::Error(ErrorKind::Alt));
+
+        assert_eq!(value(b"symbol!"),
+                   IResult::Done(&b""[..],
+                                 Value::Symbol(Identifier::new("symbol!"))));
+        assert_eq!(value("add-±".as_bytes()),
+                   IResult::Done(&b""[..],
+                                 Value::Symbol(Identifier::new("add-±"))));
+
+        assert_eq!(value("(+ true \"test\")".as_bytes()),
+                   IResult::Done(&b""[..], Value::List(
+                           vec![Value::Symbol(Identifier::new("+")),
+                                Value::Boolean(true),
+                                Value::Str(String::from("test"))])));
+    }
+
+    #[test]
+    fn test_transformer() {
+        assert_eq!(transformer("python main.py".as_bytes()), IResult::Done(&b""[..],
+                   Transformer(vec![
+                        Value::Symbol(Identifier::new("python")),
+                        Value::Symbol(Identifier::new("main.py"))])));
+        assert_eq!(transformer("(+ true \"hello\")".as_bytes()), IResult::Done(&b""[..],
+                   Transformer(vec![Value::List(vec![
+                        Value::Symbol(Identifier::new("+")),
+                        Value::Boolean(true),
+                        Value::Str(String::from("hello"))])])));
+    }
+
+    #[test]
+    fn test_pipeline() {
+        assert_eq!(pipeline("cat foo.txt | wc -l".as_bytes()), IResult::Done(&b""[..],
+                    Pipeline {
+                        elements: vec![
+                            PipelineComponent {
+                                xform: Transformer(vec![
+                                    Value::Symbol(Identifier::new("cat")),
+                                    Value::Symbol(Identifier::new("foo.txt"))]),
+                                link: Some(PipeMode::Pipe)},
+                            PipelineComponent {
+                                xform: Transformer(vec![
+                                    Value::Symbol(Identifier::new("wc")),
+                                    Value::Symbol(Identifier::new("-l"))]),
+                                link: None }],
+                        terminals: vec![]}));
+
+        assert_eq!(pipeline("cat foo.txt | wc -l > test".as_bytes()),
+            IResult::Done(&b""[..],
+                    Pipeline {
+                        elements: vec![
+                            PipelineComponent {
+                                xform: Transformer(vec![
+                                    Value::Symbol(Identifier::new("cat")),
+                                    Value::Symbol(Identifier::new("foo.txt"))]),
+                                link: Some(PipeMode::Pipe)},
+                            PipelineComponent {
+                                xform: Transformer(vec![
+                                    Value::Symbol(Identifier::new("wc")),
+                                    Value::Symbol(Identifier::new("-l"))]),
+                                link: None }],
+                        terminals: vec![TerminalMode::ReplaceFile(String::from("test"))]}));
     }
 }

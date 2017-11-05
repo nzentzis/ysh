@@ -5,3 +5,5 @@ authors = ["Noah Zentzis <nzentzis@gmail.com>"]
 
 [dependencies]
 nom         = "3.2"
+regex       = "0.2"
+lazy_static = "0.2"
