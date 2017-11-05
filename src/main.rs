@@ -12,7 +12,12 @@ use environment::Environment;
 
 fn init_environment() -> Environment {
     let mut env = Environment::new();
-    let mut excl = env.exclusive();
+
+    {
+        let mut excl = env.exclusive();
+    }
+
+    env
 }
 
 fn main() {

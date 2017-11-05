@@ -1,13 +1,22 @@
+use std::fmt;
 use std::sync::Arc;
 
 use environment::Environment;
 
+#[derive(Clone)]
 pub enum Executable {
-    Native(Fn(&Environment, &[Value]) -> Value),
+    Native(Arc<Fn(&Environment, &[Value]) -> Value>),
     //Interpreted()
 }
 
-#[derive(PartialEq, Clone, Debug)]
+impl Executable {
+    pub fn native<F>(f: F) -> Self
+        where F: Fn(&Environment, &[Value]) -> Value + 'static {
+        Executable::Native(Arc::new(f))
+    }
+}
+
+#[derive(Clone)]
 pub enum Value {
     Boolean(bool),
     Number(i64), // TODO: more arithmetic tower support
@@ -17,6 +26,35 @@ pub enum Value {
     Function(Environment, Executable)
     // function
     // polyobject
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (&Value::Boolean(x),     &Value::Boolean(y))    => x == y,
+            (&Value::Number(x),      &Value::Number(y))     => x == y,
+            (&Value::Str(ref x),     &Value::Str(ref y))    => x == y,
+            (&Value::Symbol(ref x),  &Value::Symbol(ref y)) => x == y,
+            (&Value::List(ref x),    &Value::List(ref y))   => x == y,
+
+            // don't bother comparing functions
+            (&Value::Function(_,_),&Value::Function(_,_))   => false,
+            _                                               => false
+        }
+    }
+}
+
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        match self {
+            &Value::Boolean(b)    => write!(f, "<bool:{}>", b),
+            &Value::Number(n)     => write!(f, "<num:{}>", n),
+            &Value::Str(ref s)    => write!(f, "<str:\"{}\">", s),
+            &Value::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
+            &Value::List(ref v)   => write!(f, "{:?}", v),
+            &Value::Function(_,_) => write!(f, "<function>"),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
