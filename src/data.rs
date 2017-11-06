@@ -33,6 +33,42 @@ pub enum Value {
     // polyobject
 }
 
+impl Value {
+    /// Generate an empty value
+    pub fn empty() -> Value {
+        Value::List(Vec::new())
+    }
+
+    /// Convert a value to sequential form
+    pub fn into_seq(self) -> Vec<Value> {
+        if let Value::List(l) = self {
+            l
+        } else {
+            vec![self]
+        }
+    }
+
+    /// Convert a value into string form
+    pub fn into_str(self) -> String {
+        match self {
+            Value::Boolean(true)       => String::from("true"),
+            Value::Boolean(false)      => String::from("false"),
+            Value::Number(n)           => format!("{}", n),
+            Value::Str(s)              => s,
+            Value::Symbol(id)          => (*(id.0)).to_owned(),
+            Value::List(l)             => {
+                let mut s = String::with_capacity(128);
+                s.push('(');
+                let xs: Vec<_> = l.into_iter().map(|x| x.into_str()).collect();
+                s.push_str(&xs.join(" "));
+                s.push(')');
+                s
+            },
+            Value::Function(env,f)     => String::from("<function>")
+        }
+    }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
         match (self, other) {

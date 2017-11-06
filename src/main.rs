@@ -30,6 +30,34 @@ fn get_initial_paths() -> Value {
     }
 }
 
+fn locate_executable(env: &Environment, args: &[Value]) -> Value {
+    use std::path::Path;
+
+    if args.len() == 0 {
+        return Value::empty();
+    }
+
+    let paths = if let Some(p) = env.get("path") { p }
+                else { return Value::empty() };
+    let paths = (*paths).to_owned().into_seq();
+    let paths: Vec<_> = paths.into_iter().map(Value::into_str).collect();
+    
+    // search for the requested files
+    let mut res = Vec::with_capacity(args.len());
+    for f in args {
+        let f = f.clone().into_str();
+        for p in paths.iter() {
+            let pth = Path::new(p).join(&f);
+            if pth.exists() {
+                // TODO: handle bytes conversion
+                res.push(Value::Str(pth.to_str().unwrap().to_owned()));
+                break;
+            }
+        }
+    }
+    Value::List(res)
+}
+
 fn init_environment() -> Environment {
     let mut env = Environment::new();
     let copy = env.clone();
@@ -48,6 +76,9 @@ fn init_environment() -> Environment {
                 println!("{:?}", args);
                 Value::List(vec![])
             })));
+
+        excl.set("shell/locate", Value::Function(copy.clone(),
+            Executable::native(locate_executable)));
 
         // set executable path
         excl.set("path", get_initial_paths());
