@@ -64,7 +64,7 @@ impl Value {
                 s.push(')');
                 s
             },
-            Value::Function(env,f)     => String::from("<function>")
+            Value::Function(_,_)       => String::from("<function>")
         }
     }
 }

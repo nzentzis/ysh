@@ -1,8 +1,6 @@
 use std::str;
-use std::sync::Arc;
 
 use nom::*;
-use regex::Regex;
 
 use data::*;
 

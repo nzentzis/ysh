@@ -11,7 +11,7 @@ mod evaluate;
 mod environment;
 
 use environment::{Environment, global, empty};
-use evaluate::evaluate;
+use evaluate::execute_pipeline;
 use data::{Value, Executable};
 
 fn get_initial_paths() -> Value {
@@ -63,7 +63,7 @@ fn init_environment() {
     env.set("print", Value::Function(empty(),
         Executable::native(|_, args| {
             println!("{:?}", args);
-            Value::List(vec![])
+            Value::empty()
         })));
 
     env.set("shell/locate", Value::Function(empty(),
@@ -77,7 +77,7 @@ fn main() {
     init_environment();
     let mut term = match input::Terminal::new() {
         Ok(x)   => x,
-        Err(e)  => unimplemented!()
+        Err(_)  => unimplemented!()
     };
 
     loop {
@@ -86,7 +86,7 @@ fn main() {
             Err(_) => unimplemented!()
         };
         println!("\n{:?}", cmd);
-        evaluate(cmd);
+        execute_pipeline(cmd);
         break;
     }
 }

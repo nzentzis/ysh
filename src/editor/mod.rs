@@ -5,8 +5,6 @@ use std::boxed::Box;
 
 use termion::event::Key;
 
-use input::Keymap;
-
 /// Basic trait for line-editing disciplines
 pub trait EditingDiscipline {
     /// Process a keyboard input

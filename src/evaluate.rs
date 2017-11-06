@@ -25,7 +25,7 @@ impl Evaluable for Value {
                 }
             },
             Value::List(mut xs) => {
-                let mut args: Vec<_> =
+                let args: Vec<_> =
                            xs.split_off(1)
                              .into_iter()
                              .map(|x| x.eval_in(env))
@@ -169,7 +169,6 @@ enum PlanningError {
 /// Find the plan element for an actual transformation
 fn plan_transform(mut xform: Transformer)
         -> Result<PlanElement, PlanningError> {
-    use std::ops::Deref;
     let first = xform.0[0].clone();
     if let Value::Symbol(ref s) = first {
         // try looking it up
@@ -309,7 +308,7 @@ fn build_plan(pipe: Pipeline)
 }
 
 /// Evaluate a pipeline in the given environment
-pub fn evaluate(pipe: Pipeline) {
+pub fn execute_pipeline(pipe: Pipeline) {
     let plan = build_plan(pipe);
     println!("{:?}", plan);
 }

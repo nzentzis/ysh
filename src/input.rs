@@ -64,8 +64,6 @@ struct ActiveEditor<'a> {
 
 impl<'a> ActiveEditor<'a> {
     fn new(term: &'a mut FancyTerminal) -> io::Result<Self> {
-        use std::ops::DerefMut;
-
         let raw = io::stdout().into_raw_mode()?;
 
         Ok(ActiveEditor {
@@ -87,8 +85,8 @@ impl<'a> ActiveEditor<'a> {
             }
 
             if let Some(r) = self.editor.done() {
-                write!(self.output, "\n");
-                self.output.flush();
+                write!(self.output, "\n")?;
+                self.output.flush()?;
                 return Ok(pipeline(r.as_bytes()).to_result().unwrap());
             }
 
@@ -130,9 +128,7 @@ impl FancyTerminal {
     /// Generate a new terminal. Fail if the term isn't a PTY.
     fn new() -> io::Result<FancyTerminal> {
 
-        let mut term = FancyTerminal {
-            keymap: Keymap::new(),
-        };
+        let term = FancyTerminal { keymap: Keymap::new(), };
 
         Ok(term)
     }
