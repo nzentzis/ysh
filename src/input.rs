@@ -87,6 +87,8 @@ impl<'a> ActiveEditor<'a> {
             }
 
             if let Some(r) = self.editor.done() {
+                write!(self.output, "\n");
+                self.output.flush();
                 return Ok(pipeline(r.as_bytes()).to_result().unwrap());
             }
 
