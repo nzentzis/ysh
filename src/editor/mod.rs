@@ -144,7 +144,7 @@ impl EditBuffer {
     /// the valid region. This is an O(1) operation.
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor =
-            if pos > (self.buf.len()+1) { self.buf.len()+1 }
+            if pos > self.buf.len() { self.buf.len() }
             else { pos };
     }
 
@@ -298,11 +298,11 @@ mod tests {
         let mut b = EditBuffer::from("hello world");
         assert_eq!(b.cursor(), 0);
         b.set_cursor(500);
-        assert_eq!(b.cursor(), 12);
+        assert_eq!(b.cursor(), 11);
         b.move_cursor(10);
-        assert_eq!(b.cursor(), 12);
+        assert_eq!(b.cursor(), 11);
         b.move_cursor(-10);
-        assert_eq!(b.cursor(), 2);
+        assert_eq!(b.cursor(), 1);
         b.move_cursor(-13);
         assert_eq!(b.cursor(), 0);
         b.move_cursor(4);
@@ -334,5 +334,32 @@ mod tests {
         b.insert(" test");
         assert_eq!(&b.as_string(), "hello test world");
         assert_eq!(b.cursor(), 10);
+    }
+
+    #[test]
+    fn test_editing() {
+        let mut b = EditBuffer::new();
+        assert_eq!(&b.as_string(), "");
+        assert_eq!(b.cursor(), 0);
+
+        b.insert("a");
+        assert_eq!(&b.as_string(), "a");
+        assert_eq!(b.cursor(), 1);
+
+        b.move_cursor(-2);
+        assert_eq!(&b.as_string(), "a");
+        assert_eq!(b.cursor(), 0);
+
+        b.insert("b");
+        assert_eq!(&b.as_string(), "ba");
+        assert_eq!(b.cursor(), 1);
+
+        b.move_cursor(10);
+        assert_eq!(&b.as_string(), "ba");
+        assert_eq!(b.cursor(), 2);
+
+        b.insert("c");
+        assert_eq!(&b.as_string(), "bac");
+        assert_eq!(b.cursor(), 3);
     }
 }
