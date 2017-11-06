@@ -21,7 +21,8 @@ pub trait EditingDiscipline {
 /// editing discipline at runtime.
 pub struct LineEditor {
     discipline: Box<EditingDiscipline>,
-    buffer: EditBuffer
+    buffer: EditBuffer,
+    is_done: bool
 }
 
 impl LineEditor {
@@ -29,7 +30,8 @@ impl LineEditor {
     pub fn new<D: EditingDiscipline + 'static>(disc: D) -> Self {
         LineEditor {
             discipline: Box::new(disc),
-            buffer: EditBuffer::new()
+            buffer: EditBuffer::new(),
+            is_done: false
         }
     }
 
@@ -44,12 +46,24 @@ impl LineEditor {
     /// Get mutable access to the underlying edit buffer
     pub fn buf_mut(&mut self) -> &mut EditBuffer { &mut self.buffer }
 
+    /// Extract and return the input result if it's complete
+    pub fn done(&mut self) -> Option<String> {
+        if self.is_done {
+            let r = self.buffer.as_string();
+            self.buffer.clear();
+            Some(r)
+        } else {
+            None
+        }
+    }
+
     /// Process a key event
     /// 
     /// Returns whether the line editor handled that key
     pub fn handle_key(&mut self, key: &Key) -> bool {
         if let &Key::Char(c) = key {
             if c == '\n' {
+                self.is_done = true;
                 return true;
             }
         }

@@ -107,6 +107,11 @@ impl FancyTerminal {
                 event::Event::Mouse(_) => {}, // TODO: handle mouse events
                 event::Event::Unsupported(_) => {}, // TODO: handle more events
             }
+
+            if let Some(r) = self.editor.done() {
+                return Ok(pipeline(r.as_bytes()).to_result().unwrap());
+            }
+
             self.redraw_prompt()?;
         }
 
