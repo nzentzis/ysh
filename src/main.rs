@@ -10,9 +10,13 @@ mod evaluate;
 #[allow(dead_code)] mod editor;
 #[allow(dead_code)] mod environment;
 
+use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+
 use environment::{Environment, global, empty};
 use evaluate::execute_pipeline;
 use data::{Value, Executable};
+
+static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 
 fn get_initial_paths() -> Value {
     use std::env;
@@ -69,18 +73,26 @@ fn init_environment() {
     env.set("shell/locate", Value::Function(empty(),
         Executable::native(locate_executable)));
 
+    env.set("exit", Value::Function(empty(),
+        Executable::native(|_,_| {
+            RUN_SHELL.store(false, Ordering::Relaxed);
+            Value::empty() })));
+
     // set executable path
     env.set("path", get_initial_paths());
 }
 
 fn main() {
+    RUN_SHELL.store(true, Ordering::Relaxed);
+
     init_environment();
+
     let mut term = match input::Terminal::new() {
         Ok(x)   => x,
         Err(_)  => unimplemented!()
     };
 
-    loop {
+    while RUN_SHELL.load(Ordering::Relaxed) {
         let cmd = match term.read() {
             Ok(x)  => x,
             Err(_) => unimplemented!()
