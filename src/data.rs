@@ -14,6 +14,12 @@ impl Executable {
         where F: Fn(&Environment, &[Value]) -> Value + 'static {
         Executable::Native(Arc::new(f))
     }
+
+    pub fn run(&self, env: &Environment, args: &[Value]) -> Value {
+        match self {
+            &Executable::Native(ref f) => f(env, args)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -24,7 +30,6 @@ pub enum Value {
     Symbol(Identifier),
     List(Vec<Value>),
     Function(Environment, Executable)
-    // function
     // polyobject
 }
 
