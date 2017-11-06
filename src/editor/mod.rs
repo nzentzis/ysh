@@ -27,9 +27,9 @@ pub struct LineEditor {
 
 impl LineEditor {
     /// Create a new line editor with the given discipline
-    pub fn new<D: EditingDiscipline + 'static>(disc: D) -> Self {
+    pub fn new(disc: Box<EditingDiscipline>) -> Self {
         LineEditor {
-            discipline: Box::new(disc),
+            discipline: disc,
             buffer: EditBuffer::new(),
             is_done: false
         }
@@ -55,6 +55,11 @@ impl LineEditor {
         } else {
             None
         }
+    }
+
+    /// Tear down the buffer and return the active editing discipline
+    pub fn end(self) -> Box<EditingDiscipline> {
+        self.discipline
     }
 
     /// Process a key event

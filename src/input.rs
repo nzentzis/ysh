@@ -8,7 +8,7 @@ use termion::input::TermRead;
 
 use data::*;
 use parse::pipeline;
-use editor::LineEditor;
+use editor::{LineEditor, EditingDiscipline};
 use editor::basic;
 
 /// Key binding structure which can execute actions based on dynamic bindings
@@ -58,7 +58,7 @@ struct FancyTerminal {
 
     /// Active keyboard bindings and editing discipline
     keymap: Keymap,
-    editor: LineEditor
+    discipline: Option<Box<EditingDiscipline>>
 }
 
 impl FancyTerminal {
@@ -70,49 +70,52 @@ impl FancyTerminal {
             output: raw,
             input: io::stdin().events(),
             keymap: Keymap::new(),
-            editor: LineEditor::new(basic::Editor::new())
+            discipline: Some(Box::new(basic::Editor::new()))
         };
 
         Ok(term)
     }
 
     /// Redraw the command-line prompt
-    fn redraw_prompt(&mut self) -> io::Result<()> {
+    fn redraw_prompt(&mut self, editor: &LineEditor) -> io::Result<()> {
         // TODO: prompt customization
-        let s = self.editor.buf().as_string();
+        let s = editor.buf().as_string();
         write!(self.output, "\r{}$ {}\r{}",
                clear::CurrentLine, s,
-               cursor::Right(2+s.len() as u16))?;
+               cursor::Right(2+editor.buf().cursor() as u16))?;
         self.output.flush()
     }
 
     /// Handle a keyboard event for the entry prompt
-    fn handle_key(&mut self, key: &event::Key) {
+    fn handle_key(&mut self, editor: &mut LineEditor, key: &event::Key) {
         // don't process a key if it's bound
         if self.keymap.invoke(key) {
             return;
         }
 
         // pass it to the line editor
-        self.editor.handle_key(key);
+        editor.handle_key(key);
     }
 
     /// Read a pipeline from the input terminal
     fn read(&mut self) -> io::Result<Pipeline> {
-        self.redraw_prompt()?;
+        let disc = self.discipline.take().unwrap();
+        let mut editor = LineEditor::new(disc);
+        self.redraw_prompt(&editor)?;
 
         while let Some(evt) = self.input.next() {
             match evt? {
-                event::Event::Key(key) => self.handle_key(&key),
+                event::Event::Key(key) => self.handle_key(&mut editor, &key),
                 event::Event::Mouse(_) => {}, // TODO: handle mouse events
                 event::Event::Unsupported(_) => {}, // TODO: handle more events
             }
 
-            if let Some(r) = self.editor.done() {
+            if let Some(r) = editor.done() {
+                self.discipline = Some(editor.end());
                 return Ok(pipeline(r.as_bytes()).to_result().unwrap());
             }
 
-            self.redraw_prompt()?;
+            self.redraw_prompt(&editor)?;
         }
 
         panic!()
