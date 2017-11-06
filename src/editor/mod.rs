@@ -1,13 +1,60 @@
 pub mod basic;
 
 use std::iter::FromIterator;
+use std::boxed::Box;
+
+use termion::event::Key;
 
 use input::Keymap;
 
 /// Basic trait for line-editing disciplines
-pub trait LineEditor {
-    /// Populate the given keymap with bindings for this line-editing discipline
-    fn init_bindings(&mut self, map: &mut Keymap);
+pub trait EditingDiscipline {
+    /// Process a keyboard input
+    /// 
+    /// Returns whether the discipline handled the key event
+    fn handle_key(&mut self, buf: &mut EditBuffer, key: &Key) -> bool;
+}
+
+/// An interactive line editor
+/// 
+/// Manages editing for an underlying buffer, and allows swapping out the active
+/// editing discipline at runtime.
+pub struct LineEditor {
+    discipline: Box<EditingDiscipline>,
+    buffer: EditBuffer
+}
+
+impl LineEditor {
+    /// Create a new line editor with the given discipline
+    pub fn new<D: EditingDiscipline + 'static>(disc: D) -> Self {
+        LineEditor {
+            discipline: Box::new(disc),
+            buffer: EditBuffer::new()
+        }
+    }
+
+    /// Switch the active editing discipline
+    pub fn set_discipline<D: EditingDiscipline + 'static>(&mut self, disc: D) {
+        self.discipline = Box::new(disc);
+    }
+
+    /// Get access to the underlying edit buffer
+    pub fn buf(&self) -> &EditBuffer { &self.buffer }
+
+    /// Get mutable access to the underlying edit buffer
+    pub fn buf_mut(&mut self) -> &mut EditBuffer { &mut self.buffer }
+
+    /// Process a key event
+    /// 
+    /// Returns whether the line editor handled that key
+    pub fn handle_key(&mut self, key: &Key) -> bool {
+        if let &Key::Char(c) = key {
+            if c == '\n' {
+                return true;
+            }
+        }
+        self.discipline.handle_key(&mut self.buffer, key)
+    }
 }
 
 /// Line editing structure for holding the current input buffer, cursor
@@ -56,7 +103,9 @@ impl EditBuffer {
     }
 
     /// Check whether the cursor is at the end of the buffer
-    pub fn at_end(&self) -> bool { self.cursor == (self.buf.len() + 1) }
+    pub fn at_end(&self) -> bool {
+        self.cursor == self.buf.len()
+    }
 
     /// Move the cursor relative to its current location
     /// 
@@ -98,24 +147,35 @@ impl EditBuffer {
         // at end
         if self.cursor == 0 { // beginning
             // just prepend
+            println!("at start");
             let mut v = Vec::with_capacity(self.buf.len() + text_len);
             v.extend(text.as_ref().chars());
             v.append(&mut self.buf);
             self.buf = v;
         } else if self.at_end() { // end
             // append into our vector
+            println!("at end");
             self.buf.reserve_exact(text_len);
             self.buf.extend(text.as_ref().chars());
         } else { // middle
             // split our vector in half, append to the first, then reapply the
             // second part
-            let mut earlier = self.buf.split_off(self.cursor);
-            earlier.reserve_exact(self.buf.len() + text_len);
-            earlier.extend(text.as_ref().chars());
-            earlier.append(&mut self.buf);
-            self.buf = earlier;
+            println!("at middle");
+            let mut later = self.buf.split_off(self.cursor);
+            self.buf.reserve_exact(later.len() + text_len);
+            self.buf.extend(text.as_ref().chars());
+            self.buf.append(&mut later);
         }
         self.cursor += text_len;
+    }
+
+    /// Insert one character at the cursor position
+    /// 
+    /// Uses the same semantics as `insert`, but can be implemented more
+    /// efficiently than converting the char to a string.
+    pub fn push(&mut self, c: char) {
+        self.buf.insert(self.cursor, c);
+        self.cursor += 1;
     }
 
     /// Delete a number of characters before the current cursor position and
@@ -228,5 +288,32 @@ mod tests {
         assert_eq!(b.cursor(), 0);
         b.move_cursor(4);
         assert_eq!(b.cursor(), 4);
+    }
+
+    #[test]
+    fn test_buffer_insert() {
+        let mut b = EditBuffer::new();
+
+        // at start
+        assert_eq!(&b.as_string(), "");
+        assert_eq!(b.cursor(), 0);
+        b.insert("he");
+        assert_eq!(&b.as_string(), "he");
+        assert_eq!(b.cursor(), 2);
+        b.insert("llo ");
+        assert_eq!(&b.as_string(), "hello ");
+        assert_eq!(b.cursor(), 6);
+        b.push('w');
+        assert_eq!(&b.as_string(), "hello w");
+        assert_eq!(b.cursor(), 7);
+        b.insert("orld");
+        assert_eq!(&b.as_string(), "hello world");
+        assert_eq!(b.cursor(), 11);
+
+        // in middle
+        b.move_cursor(-6);
+        b.insert(" test");
+        assert_eq!(&b.as_string(), "hello test world");
+        assert_eq!(b.cursor(), 10);
     }
 }

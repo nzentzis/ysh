@@ -50,15 +50,15 @@ impl BasicTerminal {
 
 /// Nicer terminal which supports line editing and completion
 struct FancyTerminal {
-    /// Restores the terminal to its normal state when dropped
-    restorer: Option<raw::RawTerminal<io::Stdout>>,
+    /// Output handle - restores the terminal to its normal state when dropped
+    output: raw::RawTerminal<io::Stdout>,
 
     /// I/O streams
     input: input::Events<io::Stdin>,
 
     /// Active keyboard bindings and editing discipline
     keymap: Keymap,
-    editor: Box<LineEditor>
+    editor: LineEditor
 }
 
 impl FancyTerminal {
@@ -67,18 +67,23 @@ impl FancyTerminal {
         let raw = io::stdout().into_raw_mode()?;
 
         let mut term = FancyTerminal {
-            restorer: Some(raw),
+            output: raw,
             input: io::stdin().events(),
             keymap: Keymap::new(),
-            editor: Box::new(basic::Editor::new())
+            editor: LineEditor::new(basic::Editor::new())
         };
-        term.editor.init_bindings(&mut term.keymap);
 
         Ok(term)
     }
 
     /// Redraw the command-line prompt
-    fn redraw_prompt(&mut self) {
+    fn redraw_prompt(&mut self) -> io::Result<()> {
+        // TODO: prompt customization
+        let s = self.editor.buf().as_string();
+        write!(self.output, "\r{}$ {}\r{}",
+               clear::CurrentLine, s,
+               cursor::Right(2+s.len() as u16))?;
+        self.output.flush()
     }
 
     /// Handle a keyboard event for the entry prompt
@@ -87,11 +92,14 @@ impl FancyTerminal {
         if self.keymap.invoke(key) {
             return;
         }
+
+        // pass it to the line editor
+        self.editor.handle_key(key);
     }
 
     /// Read a pipeline from the input terminal
     fn read(&mut self) -> io::Result<Pipeline> {
-        self.redraw_prompt();
+        self.redraw_prompt()?;
 
         while let Some(evt) = self.input.next() {
             match evt? {
@@ -99,6 +107,7 @@ impl FancyTerminal {
                 event::Event::Mouse(_) => {}, // TODO: handle mouse events
                 event::Event::Unsupported(_) => {}, // TODO: handle more events
             }
+            self.redraw_prompt()?;
         }
 
         panic!()
