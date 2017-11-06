@@ -10,7 +10,7 @@ mod editor;
 mod evaluate;
 mod environment;
 
-use environment::Environment;
+use environment::{Environment, global, empty};
 use evaluate::evaluate;
 use data::{Value, Executable};
 
@@ -58,37 +58,23 @@ fn locate_executable(env: &Environment, args: &[Value]) -> Value {
     Value::List(res)
 }
 
-fn init_environment() -> Environment {
-    let mut env = Environment::new();
-    let copy = env.clone();
+fn init_environment() {
+    let env = global();
+    env.set("print", Value::Function(empty(),
+        Executable::native(|_, args| {
+            println!("{:?}", args);
+            Value::List(vec![])
+        })));
 
-    {
-        let mut excl = env.exclusive();
+    env.set("shell/locate", Value::Function(empty(),
+        Executable::native(locate_executable)));
 
-        excl.set("test-function", Value::Function(copy.clone(),
-            Executable::native(|_, args| {
-                println!("test function! {:?}", args);
-                Value::List(vec![])
-            })));
-
-        excl.set("print", Value::Function(copy.clone(),
-            Executable::native(|_, args| {
-                println!("{:?}", args);
-                Value::List(vec![])
-            })));
-
-        excl.set("shell/locate", Value::Function(copy.clone(),
-            Executable::native(locate_executable)));
-
-        // set executable path
-        excl.set("path", get_initial_paths());
-    }
-
-    env
+    // set executable path
+    env.set("path", get_initial_paths());
 }
 
 fn main() {
-    let mut env = init_environment();
+    init_environment();
     let mut term = match input::Terminal::new() {
         Ok(x)   => x,
         Err(e)  => unimplemented!()
@@ -99,8 +85,8 @@ fn main() {
             Ok(x)  => x,
             Err(_) => unimplemented!()
         };
-        println!("{:?}", cmd);
-        evaluate(&mut env, cmd);
+        println!("\n{:?}", cmd);
+        evaluate(cmd);
         break;
     }
 }

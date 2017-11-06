@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use data::*;
 
@@ -19,7 +19,8 @@ impl<'a> ExclusiveEnvironment<'a> {
 
 #[derive(Clone)]
 /// Implements a partially mutable environment which can be copied and accessed
-/// from multiple threads.
+/// from multiple threads. This is intended for use to implement local bindings;
+/// global names should use the `GlobalEnvironment` structure.
 /// 
 /// This type implements a *partially* mutable environment, which means that its
 /// entries can be mutated, but the actual values inside them are immutable. By
@@ -46,15 +47,45 @@ impl Environment {
     }
 
     /// Get a value from the environment
-    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Arc<Value>> {
-        self.get_ref(key).map(Arc::clone)
-    }
-
-    /// Get a *reference* to a value in the environment
     /// 
-    /// This is more efficient than `get` since it doesn't take extra copies of
-    /// the resulting `Arc`.
-    pub fn get_ref<K: AsRef<str>>(&self, key: K) -> Option<&Arc<Value>> {
-        self.mappings.get(key.as_ref())
+    /// If not present, attempt to retrieve it from the global environment
+    /// instead
+    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Arc<Value>> {
+        self.mappings.get(key.as_ref()).map(Arc::clone)
+            .or_else(|| global().get(key))
     }
 }
+
+/// Implements the global environment where function definitions and other
+/// global bindings are stored. This is shared across threads and there's only
+/// one copy per process.
+pub struct GlobalEnvironment {
+    mappings: RwLock<HashMap<String, Arc<Value>>>
+}
+
+lazy_static! {
+    static ref ENV: GlobalEnvironment = GlobalEnvironment::new();
+    static ref EMPTY: Environment = Environment::new();
+}
+
+impl GlobalEnvironment {
+    fn new() -> Self {
+        GlobalEnvironment { mappings: RwLock::new(HashMap::new()) }
+    }
+
+    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Arc<Value>> {
+        let r = self.mappings.read().unwrap();
+        r.get(key.as_ref()).map(Arc::clone)
+    }
+
+    pub fn set<K: AsRef<str>>(&self, key: K, val: Value) {
+        let mut w = self.mappings.write().unwrap();
+        w.insert(key.as_ref().to_owned(), Arc::new(val));
+    }
+}
+
+/// Get a reference to the process-wide global environment
+pub fn global() -> &'static GlobalEnvironment { &ENV }
+
+/// Get an empty environment
+pub fn empty() -> Environment { EMPTY.clone() }

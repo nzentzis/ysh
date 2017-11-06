@@ -5,13 +5,13 @@ use environment::Environment;
 
 #[derive(Clone)]
 pub enum Executable {
-    Native(Arc<Fn(&Environment, &[Value]) -> Value>),
+    Native(Arc<Fn(&Environment, &[Value]) -> Value + Send + Sync>),
     //Interpreted()
 }
 
 impl Executable {
     pub fn native<F>(f: F) -> Self
-        where F: Fn(&Environment, &[Value]) -> Value + 'static {
+        where F: Fn(&Environment, &[Value]) -> Value + Send + Sync + 'static {
         Executable::Native(Arc::new(f))
     }
 

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use data::*;
-use environment::Environment;
+use environment::{Environment, empty, global};
 
 trait Evaluable {
     /// Try to evaluate this value in the given environment
@@ -40,9 +40,9 @@ impl Evaluable for Value {
 }
 
 /// Try to find a command using values from the active environment
-fn find_command(env: &Environment, cmd: &str) -> Vec<PathBuf> {
-    if let Some(locate) = env.get("shell/locate") {
-        execute(&*locate, &vec![Value::Str(cmd.to_owned())], env)
+fn find_command(cmd: &str) -> Vec<PathBuf> {
+    if let Some(locate) = global().get("shell/locate") {
+        execute(&*locate, &vec![Value::Str(cmd.to_owned())], &empty())
             .into_seq()
             .into_iter()
             .map(|o| PathBuf::from(o.into_str()))
@@ -62,7 +62,7 @@ fn execute(val: &Value, args: &Vec<Value>, env: &Environment) -> Value {
     } else {
         // stringify it and try finding it
         let search_obj = val.to_owned().into_str();
-        let search_res = find_command(env, &search_obj);
+        let search_res = find_command(&search_obj);
         if search_res.len() > 1 {
             eprintln!("ysh: more than one candidate for '{}'", search_obj);
             return Value::empty();
@@ -167,13 +167,13 @@ enum PlanningError {
 }
 
 /// Find the plan element for an actual transformation
-fn plan_transform(env: &Environment, mut xform: Transformer)
+fn plan_transform(mut xform: Transformer)
         -> Result<PlanElement, PlanningError> {
     use std::ops::Deref;
     let first = xform.0[0].clone();
     if let Value::Symbol(ref s) = first {
         // try looking it up
-        let r = env.get(&*(s.0));
+        let r = global().get(&*(s.0));
 
         // if we find it, use that
         if let Some(r) = r {
@@ -185,7 +185,7 @@ fn plan_transform(env: &Environment, mut xform: Transformer)
 
     // try looking up as a command
     let cmd = first.into_str();
-    let mut opts = find_command(env, &cmd);
+    let mut opts = find_command(&cmd);
 
     if opts.len() > 1 {
         eprintln!("ysh: more than one candidate for '{}'", cmd);
@@ -208,7 +208,7 @@ fn plan_transform(env: &Environment, mut xform: Transformer)
 /// do the fewest conversions possible. As a side effect, this also means we can
 /// accomodate commands that need to be plugged directly into stdin/stdout like
 /// vim or 
-fn build_plan(env: &Environment, pipe: Pipeline)
+fn build_plan(pipe: Pipeline)
         -> Result<Vec<PlanElement>, PlanningError> {
     let Pipeline {elements, terminals} = pipe;
 
@@ -265,7 +265,7 @@ fn build_plan(env: &Environment, pipe: Pipeline)
     for elem in elements {
         let PipelineComponent {xform, link} = elem;
 
-        let cmd = plan_transform(env, xform)?;
+        let cmd = plan_transform(xform)?;
         let cmd_io = cmd.io_types();
 
         // insert an adapter before if needed
@@ -309,6 +309,7 @@ fn build_plan(env: &Environment, pipe: Pipeline)
 }
 
 /// Evaluate a pipeline in the given environment
-pub fn evaluate(env: &mut Environment, pipe: Pipeline) {
-    let plan = build_plan(env, pipe);
+pub fn evaluate(pipe: Pipeline) {
+    let plan = build_plan(pipe);
+    println!("{:?}", plan);
 }
