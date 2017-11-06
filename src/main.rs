@@ -78,6 +78,13 @@ fn init_environment() {
             RUN_SHELL.store(false, Ordering::Relaxed);
             Value::empty() })));
 
+    // recovery function to restore the system environment in case something got
+    // seriously borked
+    env.set_immut("sys/recover", Value::Function(empty(),
+        Executable::native(|_,_| {
+            init_environment();
+            Value::empty() })));
+
     // set executable path
     env.set("path", get_initial_paths());
 }
