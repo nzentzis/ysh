@@ -145,7 +145,7 @@ named!(value<Value>, alt_complete!(
                 Value::Str(s)
             }
         }) |
-        map!(dbg_dmp!(paren_list), Value::List)
+        map!(paren_list, Value::List)
         )
        );
 
