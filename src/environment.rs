@@ -56,11 +56,16 @@ impl Environment {
     }
 }
 
+struct GlobalMapping {
+    value: Arc<Value>,
+    mutable: bool
+}
+
 /// Implements the global environment where function definitions and other
 /// global bindings are stored. This is shared across threads and there's only
 /// one copy per process.
 pub struct GlobalEnvironment {
-    mappings: RwLock<HashMap<String, Arc<Value>>>
+    mappings: RwLock<HashMap<String, GlobalMapping>>
 }
 
 lazy_static! {
@@ -75,12 +80,32 @@ impl GlobalEnvironment {
 
     pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Arc<Value>> {
         let r = self.mappings.read().unwrap();
-        r.get(key.as_ref()).map(Arc::clone)
+        r.get(key.as_ref()).map(|r| Arc::clone(&r.value))
+    }
+
+    fn set_key<K: AsRef<str>>(&self, key: K, val: Value, mutable: bool) {
+        use std::collections::hash_map::Entry;
+
+        let mapping = GlobalMapping { value: Arc::new(val), mutable };
+
+        let mut w = self.mappings.write().unwrap();
+        let entry = w.entry(key.as_ref().to_owned());
+
+        match entry {
+            Entry::Occupied(mut e) => {
+                let m = e.get().mutable;
+                if m { e.insert(mapping); }
+            },
+            Entry::Vacant(v) => { v.insert(mapping); }
+        }
     }
 
     pub fn set<K: AsRef<str>>(&self, key: K, val: Value) {
-        let mut w = self.mappings.write().unwrap();
-        w.insert(key.as_ref().to_owned(), Arc::new(val));
+        self.set_key(key, val, true);
+    }
+
+    pub fn set_immut<K: AsRef<str>>(&self, key: K, val: Value) {
+        self.set_key(key, val, false);
     }
 }
 
