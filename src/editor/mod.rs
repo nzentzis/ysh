@@ -119,7 +119,11 @@ impl EditBuffer {
     /// duplicated, but later updates may improve this performance. Cursor
     /// position will be preserved, but all highlight regions will be cleared.
     pub fn filter_buf<F>(&mut self, func: F) where F: Fn(String) -> String {
-        unimplemented!()
+        let s = func(self.as_string());
+        let old_cursor = self.cursor;
+        self.buf.clear();
+        self.buf.extend(s.chars());
+        self.set_cursor(old_cursor);
     }
 
     /// Check whether the cursor is at the end of the buffer
