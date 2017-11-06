@@ -48,77 +48,96 @@ impl BasicTerminal {
     }
 }
 
-/// Nicer terminal which supports line editing and completion
-struct FancyTerminal {
+struct ActiveEditor<'a> {
     /// Output handle - restores the terminal to its normal state when dropped
     output: raw::RawTerminal<io::Stdout>,
 
     /// I/O streams
     input: input::Events<io::Stdin>,
 
+    /// Line editor
+    editor: LineEditor<Box<EditingDiscipline>>,
+
+    /// Parent terminal
+    parent: &'a mut FancyTerminal
+}
+
+impl<'a> ActiveEditor<'a> {
+    fn new(term: &'a mut FancyTerminal) -> io::Result<Self> {
+        use std::ops::DerefMut;
+
+        let raw = io::stdout().into_raw_mode()?;
+
+        Ok(ActiveEditor {
+            output: raw,
+            input: io::stdin().events(),
+            editor: LineEditor::new(Box::new(basic::Editor::new())),
+            parent: term
+        })
+    }
+
+    fn read(&mut self) -> io::Result<Pipeline> {
+        self.redraw_prompt()?;
+
+        while let Some(evt) = self.input.next() {
+            match evt? {
+                event::Event::Key(key) => self.handle_key(&key),
+                event::Event::Mouse(_) => {}, // TODO: handle mouse events
+                event::Event::Unsupported(_) => {}, // TODO: handle more events
+            }
+
+            if let Some(r) = self.editor.done() {
+                return Ok(pipeline(r.as_bytes()).to_result().unwrap());
+            }
+
+            self.redraw_prompt()?;
+        }
+
+        panic!()
+    }
+
+    /// Redraw the command-line prompt
+    fn redraw_prompt(&mut self) -> io::Result<()> {
+        // TODO: prompt customization
+        let s = self.editor.buf().as_string();
+        write!(self.output, "\r{}$ {}\r{}",
+               clear::CurrentLine, s,
+               cursor::Right(2+self.editor.buf().cursor() as u16))?;
+        self.output.flush()
+    }
+
+    /// Handle a keyboard event for the entry prompt
+    fn handle_key(&mut self, key: &event::Key) {
+        // don't process a key if it's bound
+        if self.parent.keymap.invoke(key) {
+            return;
+        }
+
+        // pass it to the line editor
+        self.editor.handle_key(key);
+    }
+}
+
+/// Nicer terminal which supports line editing and completion
+struct FancyTerminal {
     /// Active keyboard bindings and editing discipline
     keymap: Keymap,
-    discipline: Option<Box<EditingDiscipline>>
 }
 
 impl FancyTerminal {
     /// Generate a new terminal. Fail if the term isn't a PTY.
     fn new() -> io::Result<FancyTerminal> {
-        let raw = io::stdout().into_raw_mode()?;
 
         let mut term = FancyTerminal {
-            output: raw,
-            input: io::stdin().events(),
             keymap: Keymap::new(),
-            discipline: Some(Box::new(basic::Editor::new()))
         };
 
         Ok(term)
     }
 
-    /// Redraw the command-line prompt
-    fn redraw_prompt(&mut self, editor: &LineEditor) -> io::Result<()> {
-        // TODO: prompt customization
-        let s = editor.buf().as_string();
-        write!(self.output, "\r{}$ {}\r{}",
-               clear::CurrentLine, s,
-               cursor::Right(2+editor.buf().cursor() as u16))?;
-        self.output.flush()
-    }
-
-    /// Handle a keyboard event for the entry prompt
-    fn handle_key(&mut self, editor: &mut LineEditor, key: &event::Key) {
-        // don't process a key if it's bound
-        if self.keymap.invoke(key) {
-            return;
-        }
-
-        // pass it to the line editor
-        editor.handle_key(key);
-    }
-
     /// Read a pipeline from the input terminal
     fn read(&mut self) -> io::Result<Pipeline> {
-        let disc = self.discipline.take().unwrap();
-        let mut editor = LineEditor::new(disc);
-        self.redraw_prompt(&editor)?;
-
-        while let Some(evt) = self.input.next() {
-            match evt? {
-                event::Event::Key(key) => self.handle_key(&mut editor, &key),
-                event::Event::Mouse(_) => {}, // TODO: handle mouse events
-                event::Event::Unsupported(_) => {}, // TODO: handle more events
-            }
-
-            if let Some(r) = editor.done() {
-                self.discipline = Some(editor.end());
-                return Ok(pipeline(r.as_bytes()).to_result().unwrap());
-            }
-
-            self.redraw_prompt(&editor)?;
-        }
-
-        panic!()
+        ActiveEditor::new(self)?.read()
     }
 }
 

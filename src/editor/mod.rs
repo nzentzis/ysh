@@ -15,19 +15,27 @@ pub trait EditingDiscipline {
     fn handle_key(&mut self, buf: &mut EditBuffer, key: &Key) -> bool;
 }
 
+impl<'a> EditingDiscipline for Box<EditingDiscipline> {
+    fn handle_key(&mut self, buf: &mut EditBuffer, key: &Key) -> bool {
+        use std::ops::DerefMut;
+        let mut r: &mut EditingDiscipline = self.deref_mut();
+        r.deref_mut().handle_key(buf, key)
+    }
+}
+
 /// An interactive line editor
 /// 
 /// Manages editing for an underlying buffer, and allows swapping out the active
 /// editing discipline at runtime.
-pub struct LineEditor {
-    discipline: Box<EditingDiscipline>,
+pub struct LineEditor<D: EditingDiscipline> {
+    discipline: D,
     buffer: EditBuffer,
     is_done: bool
 }
 
-impl LineEditor {
+impl<D: EditingDiscipline> LineEditor<D> {
     /// Create a new line editor with the given discipline
-    pub fn new(disc: Box<EditingDiscipline>) -> Self {
+    pub fn new(disc: D) -> Self {
         LineEditor {
             discipline: disc,
             buffer: EditBuffer::new(),
@@ -36,8 +44,8 @@ impl LineEditor {
     }
 
     /// Switch the active editing discipline
-    pub fn set_discipline<D: EditingDiscipline + 'static>(&mut self, disc: D) {
-        self.discipline = Box::new(disc);
+    pub fn set_discipline(&mut self, disc: D) {
+        self.discipline = disc;
     }
 
     /// Get access to the underlying edit buffer
@@ -55,11 +63,6 @@ impl LineEditor {
         } else {
             None
         }
-    }
-
-    /// Tear down the buffer and return the active editing discipline
-    pub fn end(self) -> Box<EditingDiscipline> {
-        self.discipline
     }
 
     /// Process a key event

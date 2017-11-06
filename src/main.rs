@@ -33,5 +33,7 @@ fn main() {
             Ok(x)  => x,
             Err(_) => unimplemented!()
         };
+        println!("{:?}", cmd);
+        break;
     }
 }
