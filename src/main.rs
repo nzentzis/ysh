@@ -3,12 +3,12 @@
 extern crate regex;
 extern crate termion;
 
-mod data;
+#[allow(dead_code)] mod data;
 mod input;
 mod parse;
-mod editor;
 mod evaluate;
-mod environment;
+#[allow(dead_code)] mod editor;
+#[allow(dead_code)] mod environment;
 
 use environment::{Environment, global, empty};
 use evaluate::execute_pipeline;
