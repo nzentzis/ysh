@@ -2,6 +2,7 @@
 #[macro_use] extern crate lazy_static;
 extern crate regex;
 extern crate termion;
+extern crate libc;
 
 #[allow(dead_code)] mod data;
 mod input;
@@ -90,6 +91,9 @@ fn init_environment() {
 }
 
 fn main() {
+    // become group/session leader
+    let _sid = unsafe { libc::setsid() };
+
     RUN_SHELL.store(true, Ordering::Relaxed);
 
     init_environment();
