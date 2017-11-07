@@ -8,13 +8,14 @@ extern crate libc;
 mod input;
 mod parse;
 mod evaluate;
+mod pipeline;
 #[allow(dead_code)] mod editor;
 #[allow(dead_code)] mod environment;
 
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
 use environment::{Environment, global, empty};
-use evaluate::execute_pipeline;
+use pipeline::execute_pipeline;
 use data::{Value, Executable};
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
