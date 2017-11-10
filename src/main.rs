@@ -3,8 +3,11 @@
 extern crate regex;
 extern crate termion;
 extern crate libc;
+extern crate nix;
 
 #[allow(dead_code)] mod data;
+mod jobs;
+mod globals;
 mod input;
 mod parse;
 mod evaluate;
@@ -12,11 +15,16 @@ mod pipeline;
 #[allow(dead_code)] mod editor;
 #[allow(dead_code)] mod environment;
 
+use std::io;
+use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
+use nix::unistd;
+use nix::sys::signal;
+
 use environment::{Environment, global, empty};
-use pipeline::execute_pipeline;
-use data::{Value, Executable};
+use pipeline::{Plan, PlanningError};
+use data::{Value, ValueLike, Executable};
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 
@@ -91,9 +99,63 @@ fn init_environment() {
     env.set("path", get_initial_paths());
 }
 
+fn init_process_group() -> Result<(), nix::Error> {
+    // handle process group initialization
+    if termion::is_tty(&io::stdin()) {
+        globals::enable_job_control();
+
+        // move to the foreground
+        loop {
+            let pgrp = unistd::tcgetpgrp(libc::STDIN_FILENO)
+                      .map_err(|e| {
+                          eprintln!("ysh: failed to get process group: {}", e);
+                          e
+                      })?;
+            let shell_pgid = unistd::getpgrp();
+
+            if shell_pgid == pgrp { break; }
+            signal::kill(shell_pgid, signal::SIGTTIN)
+                   .map_err(|e| {
+                       eprintln!("ysh: cannot send SIGTTIN: {}", e);
+                       e
+                   })?;
+        }
+
+        // Ignore job control signals
+        //
+        // this is safe since we're ignoring them rather than installing
+        // handlers
+        unsafe {
+            let ignore = signal::SigAction::new(signal::SigHandler::SigIgn,
+                                                signal::SA_RESTART,
+                                                signal::SigSet::empty());
+            signal::sigaction(signal::SIGINT,  &ignore)?;
+            signal::sigaction(signal::SIGQUIT, &ignore)?;
+            signal::sigaction(signal::SIGTSTP, &ignore)?;
+            signal::sigaction(signal::SIGTTIN, &ignore)?;
+            signal::sigaction(signal::SIGTTOU, &ignore)?;
+            signal::sigaction(signal::SIGCHLD, &ignore)?;
+        }
+
+        // take ownership of the process group
+        let pgid = unistd::getpid();
+        unistd::setpgid(pgid, pgid)
+               .map_err(|e| {
+                   eprintln!("ysh: failed to move to own process group: {}", e);
+                   e
+               })?;
+
+        // and take control of the terminal
+        unistd::tcsetpgrp(libc::STDIN_FILENO, pgid)?;
+    }
+
+    Ok(())
+}
+
 fn main() {
-    // become group/session leader
-    let _sid = unsafe { libc::setsid() };
+    if let Err(_) = init_process_group() {
+        exit(1);
+    }
 
     RUN_SHELL.store(true, Ordering::Relaxed);
 
@@ -109,8 +171,22 @@ fn main() {
             Ok(x)  => x,
             Err(_) => unimplemented!()
         };
-        println!("\n{:?}", cmd);
-        execute_pipeline(cmd);
-        break;
+
+        let plan = match Plan::generate(cmd) {
+            Ok(r) => r,
+            Err(e) => {
+                match e {
+                    PlanningError::MultipleInputs  =>
+                        eprintln!("ysh: failed to plan job: too many inputs"),
+                    PlanningError::MultipleOutputs =>
+                        eprintln!("ysh: failed to plan job: too many outputs"),
+                    PlanningError::NotFound => {}
+                }
+                continue;
+            }
+        };
+        println!("\n{:?}", plan);
+
+        plan.launch(false).wait();
     }
 }

@@ -1,10 +1,18 @@
+use std::io;
 use std::path::PathBuf;
+use std::os::unix::prelude::*;
+use std::process;
+
+use nix::fcntl;
+use nix::unistd;
 
 use data::*;
+use globals::job_control;
 use evaluate::{execute, find_command};
 use environment::global;
+use jobs::{Command, Job, IoChannel};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum AdapterType {
     StreamToPoly,     // full semantic stream parsing
     StreamToString,   // stream to object conversion without any semantic stuff
@@ -51,7 +59,7 @@ impl PipeType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum PlanElement {
     Expression(Value),      // obj -> obj
     Command {               // stream -> stream
@@ -88,8 +96,8 @@ impl PlanElement {
     }
 }
 
-#[derive(Debug)]
-enum PlanningError {
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum PlanningError {
     MultipleInputs,
     MultipleOutputs,
     NotFound
@@ -130,114 +138,224 @@ fn plan_transform(mut xform: Transformer)
     }
 }
 
-/// Generate a plan for evaluating the given pipeline
-/// 
-/// We need a plan for pipeline evaluation since in any given pipeline we should
-/// do the fewest conversions possible. As a side effect, this also means we can
-/// accomodate commands that need to be plugged directly into stdin/stdout like
-/// vim or 
-fn build_plan(pipe: Pipeline)
-        -> Result<Vec<PlanElement>, PlanningError> {
-    let Pipeline {elements, terminals} = pipe;
+#[derive(Debug)]
+pub struct Plan(Vec<PlanElement>);
 
-    let mut res = Vec::new();
+impl Plan {
+    /// Generate a plan for evaluating the given pipeline
+    /// 
+    /// We need a plan for pipeline evaluation since in any given pipeline we
+    /// should do the fewest conversions possible. As a side effect, this also
+    /// means we can accomodate commands that need to be plugged directly into
+    /// stdin/stdout like vim or 
+    pub fn generate(pipe: Pipeline) -> Result<Self, PlanningError> {
+        let Pipeline {elements, terminals} = pipe;
 
-    // add stdin or a file if needed
-    let mut first = None;
-    let mut last = None;
-    for t in terminals {
-        match t {
-            TerminalMode::ReplaceFile(s) => {
-                if last.is_some() {
-                    return Err(PlanningError::MultipleOutputs);
-                }
-                last = Some(PlanElement::ToFile(s));
-            },
-            TerminalMode::AppendFile(s) => {
-                if last.is_some() {
-                    return Err(PlanningError::MultipleOutputs);
-                }
-                last = Some(PlanElement::AppendFile(s));
-            },
-            TerminalMode::SetVariable(id) => {
-                if last.is_some() {
-                    return Err(PlanningError::MultipleOutputs);
-                }
-                last = Some(PlanElement::IntoVar(id));
-            },
-            TerminalMode::AppendVariable(id) => {
-                if last.is_some() {
-                    return Err(PlanningError::MultipleOutputs);
-                }
-                last = Some(PlanElement::AppendVar(id));
-            },
-            TerminalMode::InputFile(s) => {
-                if first.is_some() {
-                    return Err(PlanningError::MultipleInputs);
-                }
-                first = Some(PlanElement::FromFile(s));
-            },
-            TerminalMode::InputVar(id) => {
-                if first.is_some() {
-                    return Err(PlanningError::MultipleInputs);
-                }
-                first = Some(PlanElement::FromVar(id));
-            },
+        let mut res = Vec::new();
+
+        // add stdin or a file if needed
+        let mut first = None;
+        let mut last = None;
+        for t in terminals {
+            match t {
+                TerminalMode::ReplaceFile(s) => {
+                    if last.is_some() {
+                        return Err(PlanningError::MultipleOutputs);
+                    }
+                    last = Some(PlanElement::ToFile(s));
+                },
+                TerminalMode::AppendFile(s) => {
+                    if last.is_some() {
+                        return Err(PlanningError::MultipleOutputs);
+                    }
+                    last = Some(PlanElement::AppendFile(s));
+                },
+                TerminalMode::SetVariable(id) => {
+                    if last.is_some() {
+                        return Err(PlanningError::MultipleOutputs);
+                    }
+                    last = Some(PlanElement::IntoVar(id));
+                },
+                TerminalMode::AppendVariable(id) => {
+                    if last.is_some() {
+                        return Err(PlanningError::MultipleOutputs);
+                    }
+                    last = Some(PlanElement::AppendVar(id));
+                },
+                TerminalMode::InputFile(s) => {
+                    if first.is_some() {
+                        return Err(PlanningError::MultipleInputs);
+                    }
+                    first = Some(PlanElement::FromFile(s));
+                },
+                TerminalMode::InputVar(id) => {
+                    if first.is_some() {
+                        return Err(PlanningError::MultipleInputs);
+                    }
+                    first = Some(PlanElement::FromVar(id));
+                },
+            }
         }
-    }
-    res.push(first.unwrap_or(PlanElement::Stdin));
-    let last = last.unwrap_or(PlanElement::Stdout);
+        res.push(first.unwrap_or(PlanElement::Stdin));
+        let last = last.unwrap_or(PlanElement::Stdout);
 
-    // run through the pipeline, inserting converters as needed
-    let mut last_output = res[0].io_types().1;
-    for elem in elements {
-        let PipelineComponent {xform, link} = elem;
+        // run through the pipeline, inserting converters as needed
+        let mut last_output = res[0].io_types().1;
+        for elem in elements {
+            let PipelineComponent {xform, link} = elem;
 
-        let cmd = plan_transform(xform)?;
-        let cmd_io = cmd.io_types();
+            let cmd = plan_transform(xform)?;
+            let cmd_io = cmd.io_types();
 
-        // insert an adapter before if needed
-        if !cmd_io.0.accepts(&last_output) {
-            // generate an adapter
-            res.push(PlanElement::Adapter(
-                    AdapterType::fit(last_output, cmd_io.0)));
-        }
-        res.push(cmd);
-        last_output = cmd_io.1;
+            // insert an adapter before if needed
+            if !cmd_io.0.accepts(&last_output) {
+                // generate an adapter
+                res.push(PlanElement::Adapter(
+                        AdapterType::fit(last_output, cmd_io.0)));
+            }
+            res.push(cmd);
+            last_output = cmd_io.1;
 
-        // add the user's requested pipe
-        if let Some(mode) = link {
-            let elem = match mode {
-                PipeMode::DelimitedPipe(c) =>
-                    Some(PlanElement::Adapter(AdapterType::StreamDelim(c))),
-                PipeMode::Pipe => None,
-                PipeMode::PipeText =>
-                    Some(PlanElement::Adapter(AdapterType::StreamToString))
-            };
+            // add the user's requested pipe
+            if let Some(mode) = link {
+                let elem = match mode {
+                    PipeMode::DelimitedPipe(c) =>
+                        Some(PlanElement::Adapter(AdapterType::StreamDelim(c))),
+                    PipeMode::Pipe => None,
+                    PipeMode::PipeText =>
+                        Some(PlanElement::Adapter(AdapterType::StreamToString))
+                };
 
-            if let Some(e) = elem {
-                // don't add adapter if it wouldn't help
-                if e.io_types().1 != last_output {
-                    last_output = e.io_types().1;
-                    res.push(e);
+                if let Some(e) = elem {
+                    // don't add adapter if it wouldn't help
+                    if e.io_types().1 != last_output {
+                        last_output = e.io_types().1;
+                        res.push(e);
+                    }
                 }
             }
         }
+
+        // attach output
+        if !last.io_types().0.accepts(&last_output) {
+            // adapt I/O
+            res.push(PlanElement::Adapter(
+                    AdapterType::fit(last_output, last.io_types().0)));
+        }
+        res.push(last);
+
+        Ok(Plan(res))
     }
 
-    // attach output
-    if !last.io_types().0.accepts(&last_output) {
-        // adapt I/O
-        res.push(PlanElement::Adapter(
-                AdapterType::fit(last_output, last.io_types().0)));
+    /// Construct a file descriptor from the passed input element
+    fn get_input_fd(&self) -> RawFd {
+        match &self.0[0] {
+            &PlanElement::Stdin          => io::stdin().as_raw_fd(),
+            &PlanElement::FromFile(ref fname)=> {
+                unimplemented!("file inputs not yet ready")
+            },
+            &PlanElement::FromVar(ref id)    => {
+                unimplemented!("variable inputs not yet ready")
+            },
+            _ => panic!("plan has invalid beginning element")
+        }
     }
-    res.push(last);
 
-    Ok(res)
+    /// Launch the relevant processes and actually start running the pipeline
+    /// 
+    /// Pipelines are executed by joining all contiguous shell components
+    /// together and launching each block of contiguous operations in a thread.
+    pub fn launch(mut self, background: bool) -> ActivePipeline {
+        // fd of the last output
+        let mut last_output = self.get_input_fd();
+
+        // remove the first element so we don't process it twice
+        self.0.remove(0);
+
+        // pull info of the last element out beforehand
+        let last_elem = self.0.pop().unwrap();
+        let arr_len = self.0.len();
+
+        // execute all plan elements
+        let mut job = Job::new();
+        let mut transforms = Vec::new();
+        let mut plan_buffer = Vec::with_capacity(self.0.len());
+        for (idx, element) in self.0.into_iter().enumerate() {
+            match element {
+                PlanElement::Expression(v) =>
+                    plan_buffer.push(PlanElement::Expression(v)),
+                PlanElement::Adapter(t) =>
+                    plan_buffer.push(PlanElement::Adapter(t)),
+                PlanElement::Command {exec, invoked_name, args} => {
+                    // we have to flush the plan buffer if there's anything
+                    // there
+                    if !plan_buffer.is_empty() {
+                        println!("buffer: {:?}", plan_buffer);
+                        // generate a pipe
+                        let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
+                                           .expect("cannot generate pipes");
+                        let eval = TransformEvaluation::launch(
+                                        last_output, plan_buffer.drain(..), i);
+                        transforms.push(eval);
+                        last_output = o;
+                    }
+
+                    // check whether to link the output to stdout
+                    let fwd_stdout = idx == (arr_len-1) &&
+                                     last_elem == PlanElement::Stdout;
+
+                    // TODO: redirect or handle stderr
+                    // TODO: handle spawn failure
+                    let cmd = Command::new(exec)
+                                      .invoked_using(invoked_name)
+                                      .args(args.into_iter()
+                                                .flat_map(|x| x.into_args()))
+                                      .stdin(if last_output == 0 { IoChannel::Inherited }
+                                             else {IoChannel::Specific(last_output)})
+                                      .stdout(if fwd_stdout { IoChannel::Inherited }
+                                              else { IoChannel::Pipe });
+                    let cmd = if background { cmd }
+                              else { cmd.foreground() };
+                    let process = job.launch(cmd).expect("cannot spawn child");
+
+                    if !fwd_stdout {
+                        last_output = process.stdout().unwrap().into_raw_fd();
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        ActivePipeline { job,
+            xforms: transforms
+        }
+    }
 }
 
-/// Evaluate a pipeline in the given environment
-pub fn execute_pipeline(pipe: Pipeline) {
-    let plan = build_plan(pipe);
-    println!("{:?}", plan);
+/// Representation of a transformer evaluation which is running as part of a
+/// pipeline
+struct TransformEvaluation {
+}
+
+impl TransformEvaluation {
+    fn launch<I>(input: RawFd, elements: I, output: RawFd) -> Self
+            where I: IntoIterator<Item=PlanElement> {
+        unimplemented!()
+    }
+}
+
+/// Representation of an active pipeline.
+pub struct ActivePipeline {
+    /// OS processes
+    job: Job,
+
+    /// Asynchronous transformer evaluations
+    xforms: Vec<TransformEvaluation>
+}
+
+impl ActivePipeline {
+    /// Wait until all the processes in the pipeline have terminated
+    pub fn wait(mut self) {
+        self.job.wait();
+    }
 }

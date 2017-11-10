@@ -33,14 +33,26 @@ pub enum Value {
     // polyobject
 }
 
+pub trait ValueLike {
+    /// Convert into a sequential form
+    fn into_seq(self) -> Vec<Value>;
+
+    /// Convert a value into string form
+    fn into_str(self) -> String;
+
+    /// Convert into a vector of strings usable as command-line arguments
+    fn into_args(self) -> Vec<String>;
+}
+
 impl Value {
     /// Generate an empty value
     pub fn empty() -> Value {
         Value::List(Vec::new())
     }
+}
 
-    /// Convert a value to sequential form
-    pub fn into_seq(self) -> Vec<Value> {
+impl ValueLike for Value {
+    fn into_seq(self) -> Vec<Value> {
         if let Value::List(l) = self {
             l
         } else {
@@ -48,8 +60,7 @@ impl Value {
         }
     }
 
-    /// Convert a value into string form
-    pub fn into_str(self) -> String {
+    fn into_str(self) -> String {
         match self {
             Value::Boolean(true)       => String::from("true"),
             Value::Boolean(false)      => String::from("false"),
@@ -65,6 +76,20 @@ impl Value {
                 s
             },
             Value::Function(_,_)       => String::from("<function>")
+        }
+    }
+
+    fn into_args(self) -> Vec<String> {
+        match self {
+            Value::Boolean(true)       => vec![String::from("true")],
+            Value::Boolean(false)      => vec![String::from("false")],
+            Value::Number(n)           => vec![format!("{}", n)],
+            Value::Str(s)              => vec![s],
+            Value::Symbol(id)          => vec![(*(id.0)).to_owned()],
+            Value::List(l)             => l.into_iter()
+                                           .flat_map(|x| x.into_args())
+                                           .collect(),
+            Value::Function(_,_)       => vec![String::from("<function>")]
         }
     }
 }
