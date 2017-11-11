@@ -295,7 +295,8 @@ impl Plan {
                         let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
                                            .expect("cannot generate pipes");
                         let eval = TransformEvaluation::launch(
-                                        last_output, plan_buffer.drain(..), i);
+                                        last_output, plan_buffer.drain(..),
+                                        EvalOutput::Descriptor(i));
                         transforms.push(eval);
                         last_output = o;
                     }
@@ -326,10 +327,37 @@ impl Plan {
             }
         }
 
+        // if there's a plan in the buffer, we need to flush it
+        //
+        // NOTE: we don't need to worry about having the output already
+        // terminated here. The plan buffer will have items iff the previous
+        // element wasn't a command. If it was, the buffer would have been
+        // flushed already as part of launching it.
+        if !plan_buffer.is_empty() {
+            // figure out what output to use
+            let out = match last_elem {
+                PlanElement::Stdout         => EvalOutput::PrettyStdout,
+                PlanElement::AppendFile(f)  => unimplemented!(),
+                PlanElement::AppendVar(id)  => unimplemented!(),
+                PlanElement::ToFile(f)      => unimplemented!(),
+                PlanElement::IntoVar(id)    => unimplemented!(),
+                _                           => panic!("invalid plan terminator")
+            };
+
+            let eval = TransformEvaluation::launch(
+                last_output, plan_buffer.drain(..), out);
+            transforms.push(eval);
+        }
+
         ActivePipeline { job,
             xforms: transforms
         }
     }
+}
+
+enum EvalOutput {
+    PrettyStdout,
+    Descriptor(RawFd)
 }
 
 /// Representation of a transformer evaluation which is running as part of a
@@ -338,7 +366,7 @@ struct TransformEvaluation {
 }
 
 impl TransformEvaluation {
-    fn launch<I>(input: RawFd, elements: I, output: RawFd) -> Self
+    fn launch<I>(input: RawFd, elements: I, output: EvalOutput) -> Self
             where I: IntoIterator<Item=PlanElement> {
         unimplemented!()
     }

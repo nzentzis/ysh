@@ -11,6 +11,8 @@ use nix::sys::signal;
 use nix::fcntl;
 use nix::unistd;
 
+use libc;
+
 /// Read end of a Unix pipe
 pub struct PipeReader(RawFd);
 
@@ -32,13 +34,13 @@ impl IntoRawFd for PipeWriter {
 
 impl Drop for PipeReader {
     fn drop(&mut self) {
-        unistd::close(self.0);
+        unistd::close(self.0).unwrap_or(());
     }
 }
 
 impl Drop for PipeWriter {
     fn drop(&mut self) {
-        unistd::close(self.0);
+        unistd::close(self.0).unwrap_or(());
     }
 }
 
@@ -165,9 +167,9 @@ impl Command {
         match unistd::fork()? {
             unistd::ForkResult::Parent { child, .. } => {
                 // clean up file descriptors
-                unistd::close(in_chld);
-                unistd::close(out_chld);
-                unistd::close(err_chld);
+                unistd::close(in_chld)?;
+                unistd::close(out_chld)?;
+                unistd::close(err_chld)?;
 
                 Ok(Process {
                     pid: child,
@@ -290,7 +292,7 @@ impl Process {
                     break;
                 },
                 wait::WaitStatus::Signaled(_, _, _) => {
-                    self.state = ProcessStatus::Exited(143);
+                    self.state = ProcessStatus::Exited(127);
                     break;
                 },
                 wait::WaitStatus::Stopped(_, _) => {
@@ -322,6 +324,7 @@ impl Job {
         }
     }
 
+    /// Launch an additional command into the job
     pub fn launch(&mut self, cmd: Command) -> nix::Result<&Process> {
         let p = cmd.launch_in_pgrp(Some(self.pgroup.clone()))?;
         if self.pgroup.is_none() {
@@ -332,14 +335,42 @@ impl Job {
         Ok(self.procs.last().unwrap())
     }
 
+    /// Send a signal to all the processes in the group
+    fn signal(&mut self, sig: signal::Signal) -> nix::Result<()> {
+        let pgrp = if let &Some(ref p) = &self.pgroup { p }
+                   else { return Ok(()); };
+        let pgrp: unistd::Pid = pgrp.to_owned();
+
+        // convert process group to pid_t
+        // TODO: once killpg is available in Nix, use that instead!
+        //       this is a dirty unsafe hack!
+        let pg_pid: libc::pid_t = unsafe { ::std::mem::transmute(pgrp) };
+        let pg_pid = -pg_pid;
+        let pg_pid = unistd::Pid::from_raw(pg_pid);
+
+        signal::kill(pg_pid, sig)
+    }
+
+    /// Suspend all processes in the group
+    pub fn suspend(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGSTOP)}
+
+    /// Resume all processes in the group
+    pub fn resume(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGCONT)}
+
+    /// Terminate all processes in the group
+    pub fn terminate(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGTERM)}
+
+    /// Forcibly kill all processes in the group
+    pub fn kill(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGKILL)}
+
     /// Wait for all child processes to terminate
     pub fn wait(&mut self) -> nix::Result<()> {
         for c in self.procs.iter_mut() {
-            c.wait();
+            c.wait()?;
         }
 
         // retake control of terminal
-        unistd::tcsetpgrp(0, unistd::getpgrp());
+        unistd::tcsetpgrp(0, unistd::getpgrp())?;
         Ok(())
     }
 }
