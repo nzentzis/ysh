@@ -42,6 +42,10 @@ impl Drop for PipeWriter {
     }
 }
 
+/// An I/O channel to pass to the child process
+/// 
+/// Keep in mind that the file descriptor passed to a raw IO channel *will* be
+/// closed.
 #[derive(Copy, Clone, PartialEq)]
 pub enum IoChannel {
     Inherited,
@@ -161,9 +165,9 @@ impl Command {
         match unistd::fork()? {
             unistd::ForkResult::Parent { child, .. } => {
                 // clean up file descriptors
-                if self.stdin != IoChannel::Inherited { unistd::close(in_chld); }
-                if self.stdout != IoChannel::Inherited { unistd::close(out_chld); }
-                if self.stderr != IoChannel::Inherited { unistd::close(err_chld); }
+                unistd::close(in_chld);
+                unistd::close(out_chld);
+                unistd::close(err_chld);
 
                 Ok(Process {
                     pid: child,

@@ -247,7 +247,7 @@ impl Plan {
         Ok(Plan(res))
     }
 
-    /// Construct a file descriptor from the passed input element
+    /// Construct a file descriptor from the first input element
     fn get_input_fd(&self) -> RawFd {
         match &self.0[0] {
             &PlanElement::Stdin          => io::stdin().as_raw_fd(),
