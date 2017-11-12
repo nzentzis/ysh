@@ -398,20 +398,52 @@ impl TransformEvaluation {
     ///     a. Convert it to a sequence
     ///     b. Append the inner value
     ///     c. Return the result
-    /// 2. Use the transform value and ignore the input
+    /// 2. Evaluate the transform. If the first element of the result is
+    ///    executable, perform steps a, b, and c on the result.
+    /// 3. Use the transform value and ignore the input
     fn apply_value_xform(xform: Value, inner: Value) -> Value {
-        let xform = xform.eval_in(&mut ::environment::empty());
+        use std::ops::Deref;
+        println!("1: {:?} {:?}", xform, inner);
 
         if let Some(x) = xform.first() {
+            println!("2: {:?}", x);
             if x.is_executable() {
-                return Value::List(vec![xform.clone(), inner]);
+                return Value::List(vec![xform.clone(), inner])
+            } else if let &Value::Symbol(ref s) = x {
+                // try looking up the symbol to get an executable result
+                let val = global().get(s.0.deref());
+                match val {
+                    Some(ref x) if x.is_executable() => {
+                        let mut arr = vec![x.deref().to_owned()];
+                        arr.extend(xform.into_iter().skip(1));
+                        arr.push(inner);
+                        return Value::List(arr);
+                    },
+                    _ => {}
+                }
             }
         }
+
+        let modified_xform = xform.clone().eval_in(&mut ::environment::empty());
+        println!("3: {:?}", modified_xform);
+
+        if let Some(x) = modified_xform.first() {
+            println!("4: {:?}", x);
+            if x.is_executable() {
+                return Value::List(vec![modified_xform.clone(), inner]);
+            }
+        }
+
+        // make sure to return the *original* rather than the evaluated version
+        println!("5: {:?}", xform);
         xform
     }
 
-    fn launch<I>(input: RawFd, elements: I, output: EvalOutput) -> Self
+    fn launch<I>(input: RawFd, elements: I, output: EvalOutput) -> TransformHandle
             where I: IntoIterator<Item=PlanElement> {
+        use std::thread;
+        use std::io::prelude::*;
+
         let mut elements = elements.into_iter();
         let first = elements.next().unwrap();
 
@@ -433,12 +465,29 @@ impl TransformEvaluation {
         }
 
         // launch the transform
-        println!("{:?}", innermost);
-        unimplemented!()
+        let out = output;
+        let expr = innermost;
+        let hdl = thread::spawn(move || {
+            let res = expr.eval_in(&mut ::environment::empty());
+            match out {
+                EvalOutput::PrettyStdout => {
+                    println!("{}", res.into_str());
+                },
+                EvalOutput::Descriptor(fd) => {
+                    let mut f = unsafe {::std::fs::File::from_raw_fd(fd)};
+                    write!(f, "{}", res.into_str());
+                }
+            }
+        });
+
+        TransformHandle {
+            handle: hdl
+        }
     }
 }
 
 struct TransformHandle {
+    handle: ::std::thread::JoinHandle<()>
 }
 
 /// Representation of an active pipeline.
@@ -447,12 +496,15 @@ pub struct ActivePipeline {
     job: Job,
 
     /// Asynchronous transformer evaluations
-    xforms: Vec<TransformEvaluation>
+    xforms: Vec<TransformHandle>
 }
 
 impl ActivePipeline {
     /// Wait until all the processes in the pipeline have terminated
     pub fn wait(mut self) {
         self.job.wait().expect("wait failed");
+        for x in self.xforms {
+            x.handle.join().unwrap();
+        }
     }
 }

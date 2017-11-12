@@ -25,14 +25,19 @@ impl Evaluable for Value {
                 }
             },
             Value::List(mut xs) => {
-                let args: Vec<_> =
-                           xs.split_off(1)
-                             .into_iter()
-                             .map(|x| x.eval_in(env))
-                             .collect();
-                let exec = xs.pop().unwrap().eval_in(env);
+                // evaluate () as ()
+                if xs.is_empty() {
+                    Value::List(xs)
+                } else {
+                    let args: Vec<_> =
+                               xs.split_off(1)
+                                 .into_iter()
+                                 .map(|x| x.eval_in(env))
+                                 .collect();
+                    let exec = xs.pop().unwrap().eval_in(env);
 
-                execute(exec, args, env)
+                    execute(exec, args, env)
+                }
             },
             Value::Function(e,x)=> Value::Function(e,x),
             Value::Wrapped(e)   => Value::Wrapped(e)
