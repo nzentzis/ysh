@@ -134,7 +134,7 @@ fn init_process_group() -> Result<(), nix::Error> {
             signal::sigaction(signal::SIGTSTP, &ignore)?;
             signal::sigaction(signal::SIGTTIN, &ignore)?;
             signal::sigaction(signal::SIGTTOU, &ignore)?;
-            signal::sigaction(signal::SIGCHLD, &ignore)?;
+            //signal::sigaction(signal::SIGCHLD, &ignore)?;
         }
 
         // take ownership of the process group

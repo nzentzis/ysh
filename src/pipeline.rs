@@ -384,6 +384,6 @@ pub struct ActivePipeline {
 impl ActivePipeline {
     /// Wait until all the processes in the pipeline have terminated
     pub fn wait(mut self) {
-        self.job.wait();
+        self.job.wait().expect("wait failed");
     }
 }
