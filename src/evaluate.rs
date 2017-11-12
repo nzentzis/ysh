@@ -43,7 +43,6 @@ impl Evaluable for Value {
 pub fn find_command(cmd: &str) -> Vec<PathBuf> {
     if let Some(locate) = global().get("shell/locate") {
         execute(&*locate, &vec![Value::Str(cmd.to_owned())], &empty())
-            .into_seq()
             .into_iter()
             .map(|o| PathBuf::from(o.into_str()))
             .collect()

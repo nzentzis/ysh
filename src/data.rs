@@ -1,5 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
+use std::boxed::Box;
 
 use environment::Environment;
 
@@ -29,12 +30,18 @@ pub enum Value {
     Str(String),
     Symbol(Identifier),
     List(Vec<Value>),
-    Function(Environment, Executable)
+    Function(Environment, Executable),
+    // TODO: Lazy(Box<FnOnce()->Value>),
     // polyobject
 }
 
-pub trait ValueLike {
+/// Trait for basic behavior which applies to all value-like types. If possible,
+/// make other code dependent on these rather than requiring `Value` structures
+/// directly.
+pub trait ValueLike : IntoIterator {
     /// Convert into a sequential form
+    /// 
+    /// This must be equivalent to calling `self.into_iter().collect()`
     fn into_seq(self) -> Vec<Value>;
 
     /// Convert a value into string form
@@ -48,6 +55,29 @@ impl Value {
     /// Generate an empty value
     pub fn empty() -> Value {
         Value::List(Vec::new())
+    }
+}
+
+pub struct ValueIterator {
+    iter: ::std::vec::IntoIter<Value>
+}
+
+impl Iterator for ValueIterator {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> { self.iter.next() }
+}
+
+// Values are strict, so just build an iterator directly. No need to be lazy
+// about it.
+impl IntoIterator for Value {
+    type Item = Value;
+    type IntoIter = ValueIterator;
+
+    fn into_iter(self) -> ValueIterator {
+        ValueIterator {
+            iter: self.into_seq().into_iter()
+        }
     }
 }
 

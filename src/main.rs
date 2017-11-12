@@ -53,7 +53,7 @@ fn locate_executable(env: &Environment, args: &[Value]) -> Value {
 
     let paths = if let Some(p) = env.get("path") { p }
                 else { return Value::empty() };
-    let paths = (*paths).to_owned().into_seq();
+    let paths = (*paths).to_owned();
     let paths: Vec<_> = paths.into_iter().map(Value::into_str).collect();
     
     // search for the requested files
