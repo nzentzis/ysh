@@ -8,9 +8,10 @@ use nix::unistd;
 
 use data::*;
 use globals::job_control;
-use evaluate::{execute, find_command};
+use evaluate::{execute, find_command, Evaluable};
 use environment::global;
 use jobs::{Command, Job, IoChannel};
+use stream::*;
 
 #[derive(Debug, PartialEq)]
 enum AdapterType {
@@ -361,15 +362,83 @@ enum EvalOutput {
 }
 
 /// Representation of a transformer evaluation which is running as part of a
-/// pipeline
+/// pipeline.
+/// 
+/// Each transformer runs in its own thread, and is responsible for driving a
+/// collection of Lisp functions. The TransformEvaluation is restricted to the
+/// remote thread, but it generates a TransformHandle that can be used to manage
+/// its execution.
 struct TransformEvaluation {
 }
 
 impl TransformEvaluation {
+    fn build_innermost_elem(input: RawFd, first: PlanElement) -> PolyStream {
+        let config = match first {
+            PlanElement::Adapter(AdapterType::StreamToPoly)   => StreamOptions::new(),
+            PlanElement::Adapter(AdapterType::StreamToString) => StreamOptions::basic(),
+            PlanElement::Adapter(AdapterType::StreamDelim(c)) => {
+                let mut o = StreamOptions::new();
+                o.delimiter(c);
+                o
+            },
+            _ => panic!("unhandled plan element")
+        };
+
+        if input == io::stdin().as_raw_fd() {
+            PolyStream::from_stdin(config)
+        } else {
+            PolyStream::from_fd(input, config)
+        }
+    }
+
+    /// Generate a transformed expression from a basic one using the following
+    /// rules:
+    /// 
+    /// 1. If the transform value's first element is executable:
+    ///     a. Convert it to a sequence
+    ///     b. Append the inner value
+    ///     c. Return the result
+    /// 2. Use the transform value and ignore the input
+    fn apply_value_xform(xform: Value, inner: Value) -> Value {
+        let xform = xform.eval_in(&mut ::environment::empty());
+
+        if let Some(x) = xform.first() {
+            if x.is_executable() {
+                return Value::List(vec![xform.clone(), inner]);
+            }
+        }
+        xform
+    }
+
     fn launch<I>(input: RawFd, elements: I, output: EvalOutput) -> Self
             where I: IntoIterator<Item=PlanElement> {
+        let mut elements = elements.into_iter();
+        let first = elements.next().unwrap();
+
+        // build the innermost (first generated) value from the input
+        // since we the pipeline gets built from the inside (left element) out
+        // (toward the right) we need to keep track of the current element at
+        // all times.
+        let mut innermost = Value::wrap(
+            TransformEvaluation::build_innermost_elem(input, first));
+
+        // TODO: Support for killing active transforms
+        for elem in elements.into_iter() {
+            // turn it into a viable transform
+            innermost = match elem {
+                PlanElement::Expression(v) =>
+                    TransformEvaluation::apply_value_xform(v, innermost),
+                _ => unimplemented!()
+            };
+        }
+
+        // launch the transform
+        println!("{:?}", innermost);
         unimplemented!()
     }
+}
+
+struct TransformHandle {
 }
 
 /// Representation of an active pipeline.

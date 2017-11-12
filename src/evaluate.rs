@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use data::*;
 use environment::{Environment, empty, global};
 
-trait Evaluable {
+pub trait Evaluable {
     /// Try to evaluate this value in the given environment
     fn eval_in(self, env: &mut Environment) -> Value;
 }
@@ -32,9 +32,10 @@ impl Evaluable for Value {
                              .collect();
                 let exec = xs.pop().unwrap().eval_in(env);
 
-                execute(&exec, &args, env)
+                execute(exec, args, env)
             },
-            Value::Function(e,x)=> Value::Function(e,x)
+            Value::Function(e,x)=> Value::Function(e,x),
+            Value::Wrapped(e)   => Value::Wrapped(e)
         }
     }
 }
@@ -42,7 +43,7 @@ impl Evaluable for Value {
 /// Try to find a command using values from the active environment
 pub fn find_command(cmd: &str) -> Vec<PathBuf> {
     if let Some(locate) = global().get("shell/locate") {
-        execute(&*locate, &vec![Value::Str(cmd.to_owned())], &empty())
+        execute((*locate).clone(), vec![Value::Str(cmd.to_owned())], &empty())
             .into_iter()
             .map(|o| PathBuf::from(o.into_str()))
             .collect()
@@ -54,10 +55,10 @@ pub fn find_command(cmd: &str) -> Vec<PathBuf> {
 }
 
 /// Evalute a value in an executable context
-pub fn execute(val: &Value, args: &Vec<Value>, env: &Environment) -> Value {
+pub fn execute(val: Value, args: Vec<Value>, env: &Environment) -> Value {
     // TODO: handle lexical scoping
-    if let &Value::Function(_, ref exe) = val {
-        exe.run(&env, &args)
+    if val.is_executable() {
+        val.execute(args).unwrap()
     } else {
         // stringify it and try finding it
         let search_obj = val.to_owned().into_str();

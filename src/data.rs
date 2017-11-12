@@ -32,23 +32,46 @@ pub enum Value {
     List(Vec<Value>),
     Function(Environment, Executable),
     // TODO: Lazy(Box<FnOnce()->Value>),
-    // polyobject
+    Wrapped(Arc<ValueLike + 'static>)
 }
+
+pub type ValueIteratorBox = Box<Iterator<Item=Value>>;
 
 /// Trait for basic behavior which applies to all value-like types. If possible,
 /// make other code dependent on these rather than requiring `Value` structures
 /// directly.
-pub trait ValueLike : IntoIterator {
+/// 
+/// These functions may block, if the value is lazy and has not yet computed its
+/// final content.
+pub trait ValueLike : Send + Sync {
     /// Convert into a sequential form
     /// 
     /// This must be equivalent to calling `self.into_iter().collect()`
-    fn into_seq(self) -> Vec<Value>;
+    fn into_seq(&self) -> Vec<Value>;
+
+    /// Generate an iterator over the element's values
+    /// 
+    /// This provides an opportunity for lazy sequences to delay evaluation and
+    /// should be used when possible.
+    fn into_iter(&self) -> ValueIteratorBox;
 
     /// Convert a value into string form
-    fn into_str(self) -> String;
+    fn into_str(&self) -> String;
 
     /// Convert into a vector of strings usable as command-line arguments
-    fn into_args(self) -> Vec<String>;
+    fn into_args(&self) -> Vec<String>;
+
+    /// Whether the value can be executed with arguments
+    fn is_executable(&self) -> bool;
+
+    /// Execute the value with the given arguments, and return the result
+    /// 
+    /// If the value is not executable, return Err() with the original
+    /// arguments.
+    fn execute(&self, args: Vec<Value>) -> Result<Value, Vec<Value>>;
+
+    /// Get the first element of the object's sequential form
+    fn first(&self) -> Option<&Value>;
 }
 
 impl Value {
@@ -56,48 +79,53 @@ impl Value {
     pub fn empty() -> Value {
         Value::List(Vec::new())
     }
+
+    /// Wrap a value-like type
+    pub fn wrap<V: ValueLike+'static>(val: V) -> Self {
+        Value::Wrapped(Arc::new(val))
+    }
 }
 
-pub struct ValueIterator {
-    iter: ::std::vec::IntoIter<Value>
-}
-
-impl Iterator for ValueIterator {
-    type Item = Value;
-
-    fn next(&mut self) -> Option<Value> { self.iter.next() }
-}
-
+/*
 // Values are strict, so just build an iterator directly. No need to be lazy
 // about it.
-impl IntoIterator for Value {
+impl<T: ValueLike> IntoIterator for T {
     type Item = Value;
-    type IntoIter = ValueIterator;
+    type IntoIter = ValueIteratorBox;
 
-    fn into_iter(self) -> ValueIterator {
-        ValueIterator {
-            iter: self.into_seq().into_iter()
-        }
-    }
+    fn into_iter(self) -> ValueIteratorBox { self.into_iter() }
 }
+*/
 
 impl ValueLike for Value {
-    fn into_seq(self) -> Vec<Value> {
-        if let Value::List(l) = self {
-            l
+    fn into_seq(&self) -> Vec<Value> {
+        if let &Value::Wrapped(ref w) = self {
+            w.into_seq()
+        } else if let &Value::List(ref l) = self {
+            l.to_owned()
         } else {
-            vec![self]
+            vec![self.to_owned()]
         }
     }
 
-    fn into_str(self) -> String {
+    fn into_iter(&self) -> ValueIteratorBox {
+        if let &Value::Wrapped(ref w) = self {
+            w.into_iter()
+        } else {
+            Box::new(
+                if let &Value::List(ref l) = self { l.to_owned() }
+                else { vec![self.to_owned()] }.into_iter())
+        }
+    }
+
+    fn into_str(&self) -> String {
         match self {
-            Value::Boolean(true)       => String::from("true"),
-            Value::Boolean(false)      => String::from("false"),
-            Value::Number(n)           => format!("{}", n),
-            Value::Str(s)              => s,
-            Value::Symbol(id)          => (*(id.0)).to_owned(),
-            Value::List(l)             => {
+            &Value::Boolean(true)       => String::from("true"),
+            &Value::Boolean(false)      => String::from("false"),
+            &Value::Number(n)           => format!("{}", n),
+            &Value::Str(ref s)          => s.to_owned(),
+            &Value::Symbol(ref id)      => (*(id.0)).to_owned(),
+            &Value::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
                 let xs: Vec<_> = l.into_iter().map(|x| x.into_str()).collect();
@@ -105,21 +133,59 @@ impl ValueLike for Value {
                 s.push(')');
                 s
             },
-            Value::Function(_,_)       => String::from("<function>")
+            &Value::Function(_,_)       => String::from("<function>"),
+            &Value::Wrapped(ref w)      => w.into_str()
         }
     }
 
-    fn into_args(self) -> Vec<String> {
+    fn into_args(&self) -> Vec<String> {
         match self {
-            Value::Boolean(true)       => vec![String::from("true")],
-            Value::Boolean(false)      => vec![String::from("false")],
-            Value::Number(n)           => vec![format!("{}", n)],
-            Value::Str(s)              => vec![s],
-            Value::Symbol(id)          => vec![(*(id.0)).to_owned()],
-            Value::List(l)             => l.into_iter()
+            &Value::Boolean(true)       => vec![String::from("true")],
+            &Value::Boolean(false)      => vec![String::from("false")],
+            &Value::Number(ref n)       => vec![format!("{}", n)],
+            &Value::Str(ref s)          => vec![s.to_owned()],
+            &Value::Symbol(ref id)      => vec![(*(id.0)).to_owned()],
+            &Value::List(ref l)         => l.into_iter()
                                            .flat_map(|x| x.into_args())
                                            .collect(),
-            Value::Function(_,_)       => vec![String::from("<function>")]
+            &Value::Function(_,_)       => vec![String::from("<function>")],
+            &Value::Wrapped(ref w)      => w.into_args()
+        }
+    }
+
+    fn is_executable(&self) -> bool {
+        match self {
+            &Value::Boolean(_)       => false,
+            &Value::Number(_)        => false,
+            &Value::Str(_)           => false,
+            &Value::Symbol(_)        => false,
+            &Value::List(_)          => false,
+            &Value::Function(_,_)    => true,
+            &Value::Wrapped(ref w)   => w.is_executable()
+        }
+    }
+
+    fn execute(&self, args: Vec<Value>) -> Result<Value, Vec<Value>> {
+        match self {
+            &Value::Boolean(_)              => Err(args),
+            &Value::Number(_)               => Err(args),
+            &Value::Str(_)                  => Err(args),
+            &Value::Symbol(_)               => Err(args),
+            &Value::List(_)                 => Err(args),
+            &Value::Function(ref e,ref f)   => Ok(f.run(&e,&args)),
+            &Value::Wrapped(ref w)          => w.execute(args)
+        }
+    }
+
+    fn first(&self) -> Option<&Value> {
+        match self {
+            &Value::Boolean(_)       => Some(&self),
+            &Value::Number(_)        => Some(&self),
+            &Value::Str(_)           => Some(&self),
+            &Value::Symbol(_)        => Some(&self),
+            &Value::List(ref v)      => v.first(),
+            &Value::Function(_,_)    => Some(&self),
+            &Value::Wrapped(ref w)   => w.first()
         }
     }
 }
@@ -133,8 +199,9 @@ impl PartialEq for Value {
             (&Value::Symbol(ref x),  &Value::Symbol(ref y)) => x == y,
             (&Value::List(ref x),    &Value::List(ref y))   => x == y,
 
-            // don't bother comparing functions
+            // don't bother comparing functions or wrappers yet
             (&Value::Function(_,_),&Value::Function(_,_))   => false,
+            (&Value::Wrapped(_),   &Value::Wrapped(_))      => false,
             _                                               => false
         }
     }
@@ -149,6 +216,7 @@ impl fmt::Debug for Value {
             &Value::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
             &Value::List(ref v)   => write!(f, "{:?}", v),
             &Value::Function(_,_) => write!(f, "<function>"),
+            &Value::Wrapped(_)    => write!(f, "<wrapped>")
         }
     }
 }

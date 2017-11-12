@@ -6,14 +6,17 @@ extern crate libc;
 extern crate nix;
 
 #[allow(dead_code)] mod data;
-mod jobs;
 mod globals;
+mod stream;
+#[allow(dead_code)] mod environment;
+
+#[allow(dead_code)] mod editor;
 mod input;
 mod parse;
+
+mod jobs;
 mod evaluate;
 mod pipeline;
-#[allow(dead_code)] mod editor;
-#[allow(dead_code)] mod environment;
 
 use std::io;
 use std::process::exit;
@@ -48,13 +51,14 @@ fn locate_executable(env: &Environment, args: &[Value]) -> Value {
     use std::path::Path;
 
     if args.len() == 0 {
-        return Value::empty();
+        // allow use as a transformer
+        return Value::Function(empty(), Executable::native(locate_executable));
     }
 
     let paths = if let Some(p) = env.get("path") { p }
                 else { return Value::empty() };
     let paths = (*paths).to_owned();
-    let paths: Vec<_> = paths.into_iter().map(Value::into_str).collect();
+    let paths: Vec<_> = paths.into_iter().map(|x| x.into_str()).collect();
     
     // search for the requested files
     let mut res = Vec::with_capacity(args.len());
