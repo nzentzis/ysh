@@ -6,17 +6,19 @@ extern crate libc;
 extern crate nix;
 
 #[allow(dead_code)] mod data;
-mod globals;
-mod stream;
+#[allow(dead_code)] mod globals;
 #[allow(dead_code)] mod environment;
+
+#[allow(dead_code)] mod stream;
+#[allow(dead_code)] mod span;
 
 #[allow(dead_code)] mod editor;
 mod input;
 mod parse;
 
-mod jobs;
+#[allow(dead_code)] mod jobs;
 mod evaluate;
-mod pipeline;
+#[allow(dead_code)] mod pipeline;
 
 use std::io;
 use std::process::exit;
@@ -189,7 +191,7 @@ fn main() {
                 continue;
             }
         };
-        println!("\n{:?}", plan);
+        println!("\r{:?}", plan);
 
         plan.launch(false).wait();
     }

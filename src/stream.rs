@@ -1,30 +1,11 @@
 use std::io;
 use std::io::prelude::*;
 use std::os::unix::prelude::*;
+use std::sync::Arc;
 
-use std::fs::File;
-
+use span::*;
 use data::*;
 
-/// Input stream that lazily reads chunks from an underlying file descriptor
-enum LazyReadStream {
-    FromFile(File),
-    FromChannel(io::Stdin),
-}
-
-impl LazyReadStream {
-    /// Create a read stream for the given raw FD
-    /// 
-    /// This must be granted exclusive ownership of the passed file descriptor.
-    fn new(f: RawFd) -> Self {
-        LazyReadStream::FromFile(unsafe { File::from_raw_fd(f) })
-    }
-
-    /// Create a read stream for stdin
-    fn stdin() -> Self {
-        LazyReadStream::FromChannel(io::stdin())
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 /// Options structure to use when generating a new polymorphic stream structure.
@@ -72,9 +53,25 @@ impl StreamOptions {
     }
 }
 
-pub struct PolyStream {
+/// An underlying polystream object accessible via the public PolyStream
+/// interface.
+/// 
+/// This is wrapped in an Arc so the iterated objects can just reference the
+/// content of the stream instead of making copies.
+struct InnerStream {
     opts: StreamOptions,
     stream: LazyReadStream
+}
+
+impl InnerStream {
+    /// Get the next line from this stream
+    fn next_line(&self) -> PolyLine {
+        unimplemented!()
+    }
+}
+
+pub struct PolyStream {
+    inner: Arc<InnerStream>
 }
 
 impl PolyStream {
@@ -84,19 +81,35 @@ impl PolyStream {
     /// descriptor.
     /// 
     /// It's not suitable for pulling data from stdin.
-    pub fn from_fd(fd: RawFd, opts: StreamOptions) -> Self {
-        PolyStream {
-            opts,
-            stream: LazyReadStream::new(fd)
-        }
+    pub fn from_fd(fd: RawFd, opts: StreamOptions) -> io::Result<Self> {
+        Ok(PolyStream {
+            inner: Arc::new(InnerStream {
+                opts,
+                stream: LazyReadStream::new(fd)?
+            })
+        })
     }
 
     /// Open a stream from stdin
-    pub fn from_stdin(opts: StreamOptions) -> Self {
-        PolyStream {
-            opts,
-            stream: LazyReadStream::stdin()
-        }
+    pub fn from_stdin(opts: StreamOptions) -> io::Result<Self> {
+        Ok(PolyStream {
+            inner: Arc::new(InnerStream {
+                opts,
+                stream: LazyReadStream::stdin()?
+            })
+        })
+    }
+}
+
+struct LineIterator {
+    stream: Arc<InnerStream>
+}
+
+impl Iterator for LineIterator {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        unimplemented!()
     }
 }
 
@@ -122,4 +135,15 @@ impl ValueLike for PolyStream {
     fn first(&self) -> Option<&Value> {
         unimplemented!()
     }
+}
+
+/// A line from a polymorphic stream. Handles field conversion and acts as a
+/// list-like object.
+pub struct PolyLine {
+    stream: Arc<InnerStream>,
+    start: StreamPoint,
+    end: StreamPoint
+}
+
+impl PolyLine {
 }

@@ -385,9 +385,9 @@ impl TransformEvaluation {
         };
 
         if input == io::stdin().as_raw_fd() {
-            PolyStream::from_stdin(config)
+            PolyStream::from_stdin(config).expect("cannot construct stream")
         } else {
-            PolyStream::from_fd(input, config)
+            PolyStream::from_fd(input, config).expect("cannot construct stream")
         }
     }
 
