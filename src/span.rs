@@ -3,7 +3,7 @@ use std::io::prelude::*;
 use std::os::unix::prelude::*;
 
 use std::io::ErrorKind;
-use std::sync::{Arc, Weak, Mutex};
+use std::sync::{Arc, Weak, Mutex, RwLock};
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::ops::Range;
@@ -14,13 +14,10 @@ const MAX_CHUNK: usize = 8192;
 
 /// Chunk of an input stream
 /// 
-/// This *doesn't* hold a strong reference to previous stream chunks, but it
-/// does let you traverse backwards in the stream if the previous elements still
-/// exist. This allows for efficient traversal of contiguous ranges.
+/// This is the innermost structure which holds data. Everything else references
+/// chunks, but the chunks themselves are independent of one another. They need
+/// to be as small as possible, and weak references take extra space.
 struct Chunk {
-    /// Optional pointer to the last chunk
-    prev: Weak<Chunk>,
-
     /// Offset in bytes from the stream start to the start of this chunk
     /// 
     /// Data always extends towards higher offsets from this index
@@ -35,8 +32,7 @@ impl Chunk {
     /// 
     /// Uses the passed values for prev and start, and increments the offset
     /// value with however much it read from the stream.
-    fn new_from_read<R: Read>(prev: Weak<Chunk>,
-                              input: &mut R,
+    fn new_from_read<R: Read>(input: &mut R,
                               offset: &mut usize) -> io::Result<Self> {
         let mut buf = vec![0; MAX_CHUNK];
         let r = loop {
@@ -50,12 +46,10 @@ impl Chunk {
         let start = *offset;
         *offset += r;
         buf.shrink_to_fit();
-        Ok(Chunk {
-            prev, start,
-            data: buf.into_boxed_slice()
-        })
+        Ok(Chunk { start, data: buf.into_boxed_slice() })
     }
 
+    /*
     /// Check whether a given chunk is reachable by moving backwards from the
     /// current one
     fn reachable(&self, other: &Chunk) -> bool {
@@ -69,6 +63,54 @@ impl Chunk {
                 ptr = Arc::downgrade(&arc);
             }
             false
+        }
+    }
+    */
+}
+
+/// Stream chunk reference
+/// 
+/// Since multiple copies of the stream need to strongly reference the subsets
+/// of the chunk chain in front of them but the chunks themselves don't need to
+/// reference each other, the stream references go through this structure.
+struct StreamChunk {
+    /// Next stream chunk
+    next: Mutex<Option<Arc<StreamChunk>>>,
+
+    /// Data for this chunk
+    chunk: Arc<Chunk>
+}
+
+impl StreamChunk {
+    fn new_from_read<R: Read>(input: &mut R, offset: &mut usize)
+            -> io::Result<Self> {
+        let chunk = Chunk::new_from_read(input, offset)?;
+        Ok(StreamChunk {
+            next: Mutex::new(None),
+            chunk: Arc::new(chunk)
+        })
+    }
+
+    /// Add another stream chunk to this one if it's the head of the chain
+    fn extend(&mut self, other: &Arc<StreamChunk>) {
+        let mut n = self.next.lock().unwrap();
+        if n.is_none() {
+            *n = Some(Arc::clone(other));
+        }
+    }
+
+    /// Advance to the next chunk, reading from a stream if necessary
+    /// 
+    /// For chunks which are in the past, this won't read at all; it'll just
+    /// advance to the next chunk.
+    fn advance(&self, source: &mut ReadSource) -> io::Result<Arc<StreamChunk>> {
+        let mut w = self.next.lock().unwrap();
+        let present = w.is_some();
+        if present { Ok(Arc::clone(w.as_ref().unwrap())) }
+        else {
+            let new = Arc::new(source.read_chunk()?);
+            *w = Some(Arc::clone(&new));
+            Ok(new)
         }
     }
 }
@@ -104,12 +146,12 @@ impl ReadSource {
     }
 
     /// Read a chunk from the stream with a given "previous" pointer
-    fn read_chunk(&mut self, prev: Weak<Chunk>) -> io::Result<Chunk> {
+    fn read_chunk(&mut self) -> io::Result<StreamChunk> {
         match self {
             &mut ReadSource::FromFile {ref mut f, ref mut offs} =>
-                Chunk::new_from_read(prev, f, offs),
+                StreamChunk::new_from_read(f, offs),
             &mut ReadSource::FromChannel {ref mut f, ref mut offs} =>
-                Chunk::new_from_read(prev, f, offs)
+                StreamChunk::new_from_read(f, offs)
         }
     }
 }
@@ -143,6 +185,100 @@ impl Ord for StreamPoint {
     }
 }
 
+/// Iterator over the bytes in a span
+pub struct Bytes<'a> {
+    span: &'a Span,
+
+    // which chunk in the span we're referencing
+    chunk: Arc<Chunk>,
+    chunk_idx: usize,
+
+    // position in the current chunk
+    local_pos: usize,
+
+    // absolute stream position
+    pos: usize
+}
+
+impl<'a> Iterator for Bytes<'a> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        // advance if the current chunk is empty
+        if self.local_pos == self.chunk.data.len() {
+            self.chunk_idx += 1;
+            if self.chunk_idx == self.span.chunks.len() {
+                // make sure we take the same path if called again
+                self.chunk_idx -= 1;
+
+                // out of data!
+                return None;
+            }
+
+            self.chunk = Arc::clone(&self.span.chunks[self.chunk_idx]);
+            self.local_pos = 0;
+        }
+
+        match self.span.end {
+            StreamPoint::Past(s) => if s == self.pos { return None; }
+            StreamPoint::Future  => {}
+        }
+
+        let res = Some(self.chunk.data[self.local_pos]);
+        self.local_pos += 1;
+        self.pos += 1;
+        res
+    }
+}
+
+// TODO: more efficient char iterator
+
+/// Iterator that incrementally decodes the characters in a span as UTF-8
+/// 
+/// Undecodable characters will be replaced with U+FFFD REPLACEMENT CHARACTER.
+pub struct Chars<'a> {
+    bytes: Bytes<'a>,
+    buf: [u8; 4], // incremental buffer for UTF-8 chars
+    ptr: usize // current write index into buffer
+}
+
+impl<'a> Iterator for Chars<'a> {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        use std::str;
+
+        loop {
+            let b = self.bytes.next();
+            if b.is_none() { break None; }
+
+            self.buf[self.ptr] = b.unwrap();
+
+            match str::from_utf8(&self.buf[..]) {
+                Ok(s) => {
+                    self.ptr = 0;
+                    break Some(s.chars().next().unwrap())
+                },
+                Err(e) => {
+                    let elen = e.error_len();
+                    if let Some(len) = elen {
+                        // replace the garbage and continue
+                        let bad_suffix_len = self.ptr - e.valid_up_to();
+                        let to_strip = len - bad_suffix_len;
+                        for i in 0..to_strip { self.bytes.next(); }
+                        self.ptr = e.valid_up_to();
+                        break Some('\u{FFFD}');
+                    } else {
+                        // we might just need more data
+                        self.ptr += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// External reference to a region of chunks
 /// 
 /// This object will keep the given section of the stream in memory as long as
@@ -156,6 +292,26 @@ pub struct Span {
 }
 
 impl Span {
+    /// Check whether two spans overlap
+    pub fn intersects(&self, other: &Span) -> bool {
+        let a_start = self.chunks[0].start;
+        let a_end = {
+            let l = self.chunks.last().unwrap();
+            l.start + l.data.len()
+        };
+
+        let b_start = other.chunks[0].start;
+        let b_end = {
+            let l = other.chunks.last().unwrap();
+            l.start + l.data.len()
+        };
+
+        (a_start > b_start && a_start < b_end) ||
+        (a_end > b_start && a_end < b_end) ||
+        (b_start > a_start && b_start < a_end) ||
+        (b_end > a_start && b_end < a_end)
+    }
+
     /// Merge two contiguous or overlapping spans together
     /// 
     /// Consumes the passed span and adds its referenced region to the region
@@ -174,8 +330,7 @@ impl Span {
     pub fn union(&mut self, mut other: Span) -> Result<(), Span> {
         // coordinates are error-prone, so check by traversing the chunk chain
         // instead
-        if (!self.chunks[0].reachable(other.chunks.last().unwrap())) &&
-                (!other.chunks[0].reachable(self.chunks.last().unwrap())) {
+         if self.intersects(&other) {
             return Err(other);
         }
 
@@ -251,6 +406,19 @@ impl Span {
         }
     }
 
+    /// Get the populated length of this span
+    /// 
+    /// This will return the amount of data in the span that can be accessed
+    /// directly without reading from a stream.
+    pub fn real_len(&self) -> usize {
+        if let Some(x) = self.len() { return x; }
+
+        let start = self.start_pos();
+        let first_start = self.chunks[0].start;
+        let chunks_len: usize = self.chunks.iter().map(|c| c.data.len()).sum();
+        chunks_len - (start - first_start)
+    }
+
     /// Get a subregion of the span as a slice if possible
     /// 
     /// Since spans may not be stored contiguously in memory, this operation may
@@ -299,6 +467,37 @@ impl Span {
 
         res
     }
+
+    /// Freeze the end of the span where it is, even if more data could
+    /// otherwise be added
+    pub fn freeze(&mut self) {
+        self.end = StreamPoint::Past(self.start_pos() + self.real_len());
+    }
+
+    /// Iterate over bytes in the span
+    pub fn bytes(&self) -> Bytes {
+        Bytes {
+            span: self,
+            chunk: Arc::clone(&self.chunks[0]),
+            chunk_idx: 0,
+            local_pos: 0,
+            pos: self.start_pos()
+        }
+    }
+
+    /// Iterate over the characters in the span
+    /// 
+    /// Invalid characters will be replaced with U+FFFD REPLACEMENT CHARACTER.
+    /// If the span ends in the middle of a character, the final invalid
+    /// seequence will be dropped.
+    pub fn chars(&self) -> Chars {
+        let bs = self.bytes();
+        Chars {
+            bytes: bs,
+            buf: [0u8; 4],
+            ptr: 0
+        }
+    }
 }
 
 /// Input stream that lazily reads chunks from an underlying file descriptor
@@ -311,11 +510,10 @@ impl Span {
 /// streams of data normally without worrying about which regions to buffer at
 /// any given time.
 pub struct LazyReadStream {
-    // NOTE: Lock ordering: position -> head -> source
     // NOTE: Position is always within the head chunk
-    head: Mutex<Arc<Chunk>>,
-    position: Mutex<usize>,
-    source: Mutex<ReadSource>
+    head: Arc<StreamChunk>,
+    position: usize,
+    source: Arc<Mutex<ReadSource>>
 }
 
 impl LazyReadStream {
@@ -336,24 +534,23 @@ impl LazyReadStream {
     /// This will read at most one new chunk from the underlying stream. If the
     /// stream is already at EOF, this will return an empty `Span`. You can
     /// check for this condition using `Span::is_empty` or `Span::len`.
-    pub fn read(&self, len: usize) -> io::Result<Span> {
-        let mut pos = self.position.lock().unwrap();
-        let mut head = self.head.lock().unwrap();
+    pub fn read(&mut self, len: usize) -> io::Result<Span> {
         let mut source = self.source.lock().unwrap();
+        let pos = self.position;
 
-        let desired_end = *pos + len;
-        let head_end = head.start + head.data.len();
+        let desired_end = pos + len;
+        let head_end = self.head.chunk.start + self.head.chunk.data.len();
 
         // it's okay to deliver partial spans
         let span_end = if desired_end < head_end { StreamPoint::Past(desired_end) }
                        else { StreamPoint::Future };
-        let read_len = if desired_end < head_end { len } else { head_end - *pos };
+        let read_len = if desired_end < head_end { len } else { head_end - pos };
         let res = Span {
-            chunks: vec![Arc::clone(&*head)],
-            start: StreamPoint::Past(*pos),
+            chunks: vec![Arc::clone(&self.head.chunk)],
+            start: StreamPoint::Past(pos),
             end: span_end
         };
-        *pos += read_len;
+        self.position += read_len;
 
         // are we out of data in the current block? we have to maintain the
         // invariant "there's data between the pointer and the end of the
@@ -361,10 +558,8 @@ impl LazyReadStream {
         //
         // This will always happen if the read length is above the remaining
         // head length
-        if *pos == head_end {
-            let new_head = Arc::new(
-                source.read_chunk(Arc::downgrade(&*head))?);
-            *head = new_head;
+        if self.position == head_end {
+            self.head = self.head.advance(&mut *source)?;
         }
 
         Ok(res)
@@ -374,8 +569,17 @@ impl LazyReadStream {
     /// 
     /// This works similar to `read` but adds data to the end of an existing
     /// span. If the passed span does not end with `Future`, this is a no-op.
-    pub fn extend(&self, span: &mut Span, len: usize) -> io::Result<()> {
+    /// 
+    /// # Panics
+    /// 
+    /// This will panic if the given span's start point begins after the
+    /// stream's read pointer or if it ends in `Future` and the end does not
+    /// align with the current read pointer.
+    pub fn extend(&mut self, span: &mut Span, len: usize) -> io::Result<()> {
         if span.end != StreamPoint::Future { return Ok(()); }
+        if span.real_len() + span.start_pos() != self.position {
+            panic!("cannot extend a span from the past");
+        }
 
         let s = self.read(len)?;
         span.union(s)
@@ -386,12 +590,22 @@ impl LazyReadStream {
 
     fn new_from_source(mut src: ReadSource) -> io::Result<Self> {
         // pull the first block from the read source
-        let block = src.read_chunk(Weak::new())?;
+        let block = src.read_chunk()?;
 
         Ok(LazyReadStream {
-            head: Mutex::new(Arc::new(block)),
-            position: Mutex::new(0),
-            source: Mutex::new(src)
+            head: Arc::new(block),
+            position: 0,
+            source: Arc::new(Mutex::new(src))
         })
+    }
+}
+
+impl Clone for LazyReadStream {
+    fn clone(&self) -> Self {
+        LazyReadStream {
+            head: Arc::clone(&self.head),
+            position: self.position,
+            source: Arc::clone(&self.source)
+        }
     }
 }
