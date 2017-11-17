@@ -86,6 +86,16 @@ fn init_environment() {
             Value::empty()
         })));
 
+    env.set("print-lines", Value::Function(empty(),
+        Executable::native(|_, args| {
+            for a in args {
+                for i in a.into_iter() {
+                    println!("({})", i.into_str());
+                }
+            }
+            Value::empty()
+        })));
+
     env.set("shell/locate", Value::Function(empty(),
         Executable::native(locate_executable)));
 

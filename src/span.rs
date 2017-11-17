@@ -6,7 +6,7 @@ use std::io::ErrorKind;
 use std::sync::{Arc, Weak, Mutex, RwLock};
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::ops::Range;
+use std::ops::{Range, RangeFrom, RangeTo, RangeFull, Index};
 
 use std::fs::File;
 
@@ -45,6 +45,7 @@ impl Chunk {
 
         let start = *offset;
         *offset += r;
+        buf.truncate(r);
         buf.shrink_to_fit();
         Ok(Chunk { start, data: buf.into_boxed_slice() })
     }
@@ -279,6 +280,7 @@ impl<'a> Iterator for Chars<'a> {
     }
 }
 
+#[derive(Clone)]
 /// External reference to a region of chunks
 /// 
 /// This object will keep the given section of the stream in memory as long as
@@ -432,46 +434,18 @@ impl Span {
         None
     }
 
-    /// Copy up to the given range of bytes out of the span
-    /// 
-    /// This will copy as many bytes as possible into a new `Vec`. If the span
-    /// ends in `Future` but might be able to contain the given range, the `Vec`
-    /// may not contain the full size of the range given.
-    /// 
-    /// # Panics
-    /// This will panic if the span cannot possibly contain the given range
-    pub fn copy(&self, range: Range<usize>) -> Vec<u8> {
-        // check to make sure we can hold the range
-        if range.end <= self.start_pos() {
-            panic!("range out of span bounds");
-        }
-        match self.end {
-            StreamPoint::Past(l) if range.end > l =>
-                panic!("range out of span bounds"),
-            _ => {}
-        }
-
-        // find the start chunk
-        let start_chunk = self.chunks.iter()
-                                     .position(|c| c.start > range.start)
-                                     .unwrap() - 1;
-        let mut res: Vec<u8> = Vec::with_capacity(range.len());
-        for chunk in self.chunks[start_chunk..].iter() {
-            let chunk_end = chunk.start + chunk.data.len();
-            let start = if chunk.start < range.start {range.start - chunk.start}
-                        else {0};
-            let end = if chunk_end > range.end { range.end - chunk.start }
-                      else {chunk.data.len()};
-            res.extend(&((*chunk.data)[start..end]));
-        }
-
-        res
-    }
-
     /// Freeze the end of the span where it is, even if more data could
     /// otherwise be added
     pub fn freeze(&mut self) {
         self.end = StreamPoint::Past(self.start_pos() + self.real_len());
+    }
+
+    /// Check whether the span is frozen
+    pub fn is_frozen(&self) -> bool {
+        match &self.end {
+            &StreamPoint::Future  => false,
+            &StreamPoint::Past(_) => true,
+        }
     }
 
     /// Iterate over bytes in the span
@@ -480,7 +454,7 @@ impl Span {
             span: self,
             chunk: Arc::clone(&self.chunks[0]),
             chunk_idx: 0,
-            local_pos: 0,
+            local_pos: self.start_pos() - self.chunks[0].start,
             pos: self.start_pos()
         }
     }
@@ -497,6 +471,147 @@ impl Span {
             buf: [0u8; 4],
             ptr: 0
         }
+    }
+}
+
+pub trait Subspan<Idx> {
+    /// Create a new span from a sub-region of this one
+    ///
+    /// # Panics
+    /// This function will panic if the specified range does not lie within this
+    /// span.
+    fn subspan(&self, idx: Idx) -> Span;
+
+    /// Copy up to the given range of bytes out of the span
+    /// 
+    /// This will copy as many bytes as possible into a new `Vec`. If the span
+    /// ends in `Future` but might be able to contain the given range, the `Vec`
+    /// may not contain the full size of the range given.
+    /// 
+    /// # Panics
+    /// This will panic if the span cannot possibly contain the given range
+    fn copy(&self, range: Idx) -> Vec<u8>;
+}
+
+impl Subspan<Range<usize>> for Span {
+    fn subspan(&self, range: Range<usize>) -> Span {
+        if range.start < self.start_pos() {
+            panic!("specified subspan out of range");
+        }
+        if let StreamPoint::Past(x) = self.end {
+            if range.end >= x {
+                panic!("specified subspan out of range");
+            }
+        }
+
+        // find the start chunk
+        let mut start_chunk = 0;
+        loop {
+            let c = &self.chunks[start_chunk];
+            let end = c.start + c.data.len();
+            if range.start >= c.start && range.start < end {
+                break;
+            }
+            start_chunk += 1;
+        }
+
+        let mut res: Vec<Arc<Chunk>> = Vec::with_capacity(self.chunks.len());
+        for chunk in self.chunks[start_chunk..].iter() {
+            res.push(Arc::clone(chunk));
+
+            let chunk_end = chunk.start + chunk.data.len();
+            if chunk_end >= range.end {
+                break;
+            }
+        }
+
+        Span {
+            start: StreamPoint::Past(range.start),
+            end: StreamPoint::Past(range.end),
+            chunks: res
+        }
+    }
+
+    fn copy(&self, range: Range<usize>) -> Vec<u8> {
+        // check to make sure we can hold the range
+        if range.start < self.start_pos() {
+            panic!("range out of span bounds");
+        }
+        match self.end {
+            StreamPoint::Past(l) if range.end > l =>
+                panic!("range out of span bounds"),
+            _ => {}
+        }
+
+        // find the start chunk
+        let mut start_chunk = 0;
+        loop {
+            let c = &self.chunks[start_chunk];
+            let end = c.start + c.data.len();
+            if range.start >= c.start && range.start < end {
+                break;
+            }
+            start_chunk += 1;
+        }
+        
+        let mut res: Vec<u8> = Vec::with_capacity(range.len());
+        for chunk in self.chunks[start_chunk..].iter() {
+            let chunk_end = chunk.start + chunk.data.len();
+            let start = if chunk.start < range.start {range.start - chunk.start}
+                        else {0};
+            let end = if chunk_end > range.end { range.end - chunk.start }
+                      else {chunk.data.len()};
+            res.extend(&((*chunk.data)[start..end]));
+        }
+
+        res
+    }
+}
+
+impl Subspan<RangeTo<usize>> for Span {
+    fn subspan(&self, range: RangeTo<usize>) -> Span {
+        self.subspan(self.start_pos()..range.end)
+    }
+
+    fn copy(&self, range: RangeTo<usize>) -> Vec<u8> {
+        self.copy(self.start_pos()..range.end)
+    }
+}
+
+impl Subspan<RangeFrom<usize>> for Span {
+    fn subspan(&self, range: RangeFrom<usize>) -> Span {
+        let last_chunk = self.chunks.last().unwrap();
+        let end_pos = match self.len() {
+            Some(l) => self.start_pos() + l,
+            None    => last_chunk.start + last_chunk.data.len()
+        };
+        let mut s = self.subspan(range.start..end_pos);
+        s.end = StreamPoint::Future;
+        s
+    }
+
+    fn copy(&self, range: RangeFrom<usize>) -> Vec<u8> {
+        let last_chunk = self.chunks.last().unwrap();
+        let end_pos = match self.len() {
+            Some(l) => self.start_pos() + l,
+            None    => last_chunk.start + last_chunk.data.len()
+        };
+        self.copy(range.start..end_pos)
+    }
+}
+
+impl Subspan<RangeFull> for Span {
+    fn subspan(&self, range: RangeFull) -> Span {
+        self.clone()
+    }
+
+    fn copy(&self, range: RangeFull) -> Vec<u8> {
+        let last_chunk = self.chunks.last().unwrap();
+        let end_pos = match self.len() {
+            Some(l) => self.start_pos() + l,
+            None    => last_chunk.start + last_chunk.data.len()
+        };
+        self.copy(self.start_pos()..end_pos)
     }
 }
 
@@ -538,6 +653,15 @@ impl LazyReadStream {
         let mut source = self.source.lock().unwrap();
         let pos = self.position;
 
+        // if the head is empty, we're at EOF
+        if self.head.chunk.data.len() == 0 {
+            return Ok(Span {
+                chunks: vec![Arc::clone(&self.head.chunk)],
+                start: StreamPoint::Past(pos),
+                end: StreamPoint::Past(pos),
+            });
+        }
+
         let desired_end = pos + len;
         let head_end = self.head.chunk.start + self.head.chunk.data.len();
 
@@ -569,6 +693,8 @@ impl LazyReadStream {
     /// 
     /// This works similar to `read` but adds data to the end of an existing
     /// span. If the passed span does not end with `Future`, this is a no-op.
+    /// If the underlying stream hits EOF, this will freeze the span and replace
+    /// the end with a definite point.
     /// 
     /// # Panics
     /// 
@@ -582,9 +708,13 @@ impl LazyReadStream {
         }
 
         let s = self.read(len)?;
+        let empty = s.is_empty();
         span.union(s)
             .map_err(|_|())
             .expect("tried to extend a span from the past");
+
+        if empty { span.freeze(); }
+
         Ok(())
     }
 
