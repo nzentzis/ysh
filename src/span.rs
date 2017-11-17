@@ -49,24 +49,6 @@ impl Chunk {
         buf.shrink_to_fit();
         Ok(Chunk { start, data: buf.into_boxed_slice() })
     }
-
-    /*
-    /// Check whether a given chunk is reachable by moving backwards from the
-    /// current one
-    fn reachable(&self, other: &Chunk) -> bool {
-        if self.start == other.start { true }
-        else if self.start < other.start { false }
-        else {
-            // traverse
-            let mut ptr = Weak::clone(&self.prev);
-            while let Some(arc) = ptr.upgrade() {
-                if arc.start == other.start { return true; }
-                ptr = Arc::downgrade(&arc);
-            }
-            false
-        }
-    }
-    */
 }
 
 /// Stream chunk reference
