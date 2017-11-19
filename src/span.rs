@@ -892,5 +892,6 @@ mod test {
         assert_eq!(s3.start, StreamPoint::Past(6));
         assert_eq!(s3.end, StreamPoint::Future);
         assert_eq!(s2.copy(2..).as_slice(), b"6789ab");
+        assert_eq!(s2.copy(..).as_slice(), b"456789ab");
     }
 }
