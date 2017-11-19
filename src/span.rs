@@ -498,7 +498,7 @@ pub trait Subspan<Idx> {
 impl Subspan<Range<usize>> for Span {
     fn subspan(&self, range: Range<usize>) -> Span {
         if let StreamPoint::Past(x) = self.end {
-            if (self.start_pos() + range.end) >= x {
+            if (self.start_pos() + range.end) > x {
                 panic!("specified subspan out of range");
             }
         }
@@ -520,7 +520,7 @@ impl Subspan<Range<usize>> for Span {
             res.push(Arc::clone(chunk));
 
             let chunk_end = chunk.start + chunk.data.len();
-            if chunk_end >= range.end {
+            if chunk_end >= end {
                 break;
             }
         }
@@ -535,7 +535,7 @@ impl Subspan<Range<usize>> for Span {
     fn copy(&self, range: Range<usize>) -> Vec<u8> {
         // check to make sure we can hold the range
         if let StreamPoint::Past(x) = self.end {
-            if (self.start_pos() + range.end) >= x {
+            if (self.start_pos() + range.end) > x {
                 panic!("range out of span bounds");
             }
         }
@@ -588,22 +588,24 @@ impl Subspan<RangeTo<usize>> for Span {
 impl Subspan<RangeFrom<usize>> for Span {
     fn subspan(&self, range: RangeFrom<usize>) -> Span {
         let last_chunk = self.chunks.last().unwrap();
-        let end_pos = match self.len() {
-            Some(l) => self.start_pos() + l,
-            None    => last_chunk.start + last_chunk.data.len()
+        let length = match self.len() {
+            Some(l) => l,
+            None    => (last_chunk.start + last_chunk.data.len())
+                      - self.start_pos()
         };
-        let mut s = self.subspan(range.start..end_pos);
+        let mut s = self.subspan(range.start..length);
         s.end = StreamPoint::Future;
         s
     }
 
     fn copy(&self, range: RangeFrom<usize>) -> Vec<u8> {
         let last_chunk = self.chunks.last().unwrap();
-        let end_pos = match self.len() {
-            Some(l) => self.start_pos() + l,
-            None    => last_chunk.start + last_chunk.data.len()
+        let length = match self.len() {
+            Some(l) => l,
+            None    => (last_chunk.start + last_chunk.data.len())
+                      - self.start_pos()
         };
-        self.copy(range.start..end_pos)
+        self.copy(range.start..length)
     }
 }
 
@@ -614,11 +616,12 @@ impl Subspan<RangeFull> for Span {
 
     fn copy(&self, range: RangeFull) -> Vec<u8> {
         let last_chunk = self.chunks.last().unwrap();
-        let end_pos = match self.len() {
-            Some(l) => self.start_pos() + l,
-            None    => last_chunk.start + last_chunk.data.len()
+        let length = match self.len() {
+            Some(l) => l,
+            None    => (last_chunk.start + last_chunk.data.len())
+                      - self.start_pos()
         };
-        self.copy(self.start_pos()..end_pos)
+        self.copy(0..length)
     }
 }
 
@@ -893,5 +896,10 @@ mod test {
         assert_eq!(s3.end, StreamPoint::Future);
         assert_eq!(s2.copy(2..).as_slice(), b"6789ab");
         assert_eq!(s2.copy(..).as_slice(), b"456789ab");
+
+        let temp = s2.subspan(2..);
+        let templ = temp.real_len();
+        assert_eq!(templ, 6);
+        assert_eq!(s2.subspan(..).real_len(), 8);
     }
 }
