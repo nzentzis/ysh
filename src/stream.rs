@@ -75,14 +75,12 @@ impl InnerStream {
         let avail_len = self.front.real_len();
         for (i,b) in avail.bytes().enumerate() {
             if b == b'\n' {
-                let idx = self.front.start_pos() + i;
-
                 // split here
-                let new_span = avail.subspan(..idx);
+                let new_span = avail.subspan(..i);
 
                 // TODO: check that idx+1 is valid?
                 if i+1 < avail_len {
-                    self.front = self.front.subspan(idx+1..);
+                    self.front = self.front.subspan(i+1..);
                 } else {
                     self.front = self.stream.read(512)?;
                 }
