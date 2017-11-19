@@ -10,6 +10,10 @@ use std::ops::{Range, RangeFrom, RangeTo, RangeFull, Index};
 
 use std::fs::File;
 
+#[cfg(test)]
+const MAX_CHUNK: usize = 4;
+
+#[cfg(not(test))]
 const MAX_CHUNK: usize = 8192;
 
 /// Chunk of an input stream
@@ -107,6 +111,10 @@ pub enum ReadSource {
         f: io::Stdin,
         offs: usize
     },
+    FromReadBox {
+        r: Box<Read + Send + 'static>,
+        offs: usize
+    }
 }
 
 impl ReadSource {
@@ -134,12 +142,14 @@ impl ReadSource {
             &mut ReadSource::FromFile {ref mut f, ref mut offs} =>
                 StreamChunk::new_from_read(f, offs),
             &mut ReadSource::FromChannel {ref mut f, ref mut offs} =>
-                StreamChunk::new_from_read(f, offs)
+                StreamChunk::new_from_read(f, offs),
+            &mut ReadSource::FromReadBox {ref mut r, ref mut offs} =>
+                StreamChunk::new_from_read(r, offs)
         }
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 /// A location value in a lazy stream. Used to store start and end points
 /// of lines and fields.
 /// 
@@ -349,6 +359,12 @@ impl Span {
                         a = Some(x);
                         b = j.next();
                     }
+                } else if a.is_some() {
+                    new_chunks.push(a.unwrap());
+                    a = i.next();
+                } else if b.is_some() {
+                    new_chunks.push(b.unwrap());
+                    b = i.next();
                 }
             }
         }
@@ -458,6 +474,10 @@ impl Span {
 
 pub trait Subspan<Idx> {
     /// Create a new span from a sub-region of this one
+    /// 
+    /// The passed range is *relative*, not absolute. For example, taking the
+    /// range 0..10 of a span between stream positions 2000 and 2200 will make
+    /// a span between stream positions 2000 and 2010.
     ///
     /// # Panics
     /// This function will panic if the specified range does not lie within this
@@ -477,26 +497,24 @@ pub trait Subspan<Idx> {
 
 impl Subspan<Range<usize>> for Span {
     fn subspan(&self, range: Range<usize>) -> Span {
-        if range.start < self.start_pos() {
-            panic!("specified subspan out of range");
-        }
         if let StreamPoint::Past(x) = self.end {
-            if range.end >= x {
+            if (self.start_pos() + range.end) >= x {
                 panic!("specified subspan out of range");
             }
         }
 
         // find the start chunk
         let mut start_chunk = 0;
+        let start_pos = self.start_pos() + range.start;
         loop {
             let c = &self.chunks[start_chunk];
-            let end = c.start + c.data.len();
-            if range.start >= c.start && range.start < end {
+            if start_pos >= c.start && start_pos < (c.start + c.data.len()) {
                 break;
             }
             start_chunk += 1;
         }
 
+        let end = self.start_pos() + range.end;
         let mut res: Vec<Arc<Chunk>> = Vec::with_capacity(self.chunks.len());
         for chunk in self.chunks[start_chunk..].iter() {
             res.push(Arc::clone(chunk));
@@ -508,42 +526,49 @@ impl Subspan<Range<usize>> for Span {
         }
 
         Span {
-            start: StreamPoint::Past(range.start),
-            end: StreamPoint::Past(range.end),
+            start: StreamPoint::Past(self.start_pos() + range.start),
+            end: StreamPoint::Past(self.start_pos() + range.end),
             chunks: res
         }
     }
 
     fn copy(&self, range: Range<usize>) -> Vec<u8> {
         // check to make sure we can hold the range
-        if range.start < self.start_pos() {
-            panic!("range out of span bounds");
-        }
-        match self.end {
-            StreamPoint::Past(l) if range.end > l =>
-                panic!("range out of span bounds"),
-            _ => {}
+        if let StreamPoint::Past(x) = self.end {
+            if (self.start_pos() + range.end) >= x {
+                panic!("range out of span bounds");
+            }
         }
 
         // find the start chunk
         let mut start_chunk = 0;
+        let start_pos = self.start_pos() + range.start;
         loop {
             let c = &self.chunks[start_chunk];
-            let end = c.start + c.data.len();
-            if range.start >= c.start && range.start < end {
+            if start_pos >= c.start && start_pos < (c.start + c.data.len()) {
                 break;
             }
             start_chunk += 1;
         }
-        
+
+        // copy each chunk over
+        let mut start_pos = start_pos - self.chunks[start_chunk].start;
+        let mut to_copy = range.len();
+
         let mut res: Vec<u8> = Vec::with_capacity(range.len());
         for chunk in self.chunks[start_chunk..].iter() {
-            let chunk_end = chunk.start + chunk.data.len();
-            let start = if chunk.start < range.start {range.start - chunk.start}
-                        else {0};
-            let end = if chunk_end > range.end { range.end - chunk.start }
-                      else {chunk.data.len()};
-            res.extend(&((*chunk.data)[start..end]));
+            // we can use the start pos directly since we already adjusted for
+            // the chunk's start position
+            let slice =
+                if chunk.data.len() <= to_copy { &((*chunk.data)[start_pos..]) }
+                else { &((*chunk.data)[start_pos..to_copy]) };
+            res.extend(slice);
+
+            // later chunks just start from the beginning
+            start_pos = 0;
+            to_copy -= slice.len();
+
+            if to_copy == 0 { break; }
         }
 
         res
@@ -719,5 +744,153 @@ impl Clone for LazyReadStream {
             position: self.position,
             source: Arc::clone(&self.source)
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    // NOTE: chunk size is set to 4 in test configuration to make creating
+    // boundary conditions easier
+    use std::io::Cursor;
+    use super::*;
+
+    fn make_bytes_stream(data: &'static [u8]) -> LazyReadStream {
+        LazyReadStream::new_from_source(ReadSource::FromReadBox {
+            r: Box::new(Cursor::new(data)),
+            offs: 0
+        }).expect("failed to create stream")
+    }
+
+    #[test]
+    fn chunk_building() {
+        let test = b"test data!";
+        let mut offset = 0;
+        let c = Chunk::new_from_read(&mut Cursor::new(test), &mut offset)
+                      .expect("failed to read chunk data");
+        assert_eq!(offset, 4);
+
+        assert_eq!(c.start, 0);
+        assert_eq!(Vec::from(c.data.clone()).as_slice(), &test[..4]);
+    }
+
+    #[test]
+    fn stream_chunks() {
+        let test = b"test data!";
+        let mut r = Cursor::new(test);
+        let mut strm = ReadSource::FromReadBox {
+            r: Box::new(r),
+            offs: 0 };
+
+        let c = strm.read_chunk().expect("failed to read chunk 1");
+        assert!(c.next.lock().unwrap().is_none());
+        assert_eq!(c.chunk.start, 0);
+        assert_eq!(Vec::from(c.chunk.data.clone()).as_slice(), &test[..4]);
+
+        let c2 = c.advance(&mut strm).expect("failed to advance");
+        assert!(c.next.lock().unwrap().is_some());
+        assert_eq!(c.chunk.start, 0);
+        assert_eq!(Vec::from(c.chunk.data.clone()).as_slice(), &test[..4]);
+        assert_eq!(c2.chunk.start, 4);
+        assert_eq!(Vec::from(c2.chunk.data.clone()).as_slice(), &test[4..8]);
+    }
+
+    #[test]
+    fn stream_points() {
+        let a = StreamPoint::Past(0);
+        let b = StreamPoint::Past(16);
+        let c = StreamPoint::Future;
+
+        assert!(a < b);
+        assert!(b > a);
+        assert!(a != b);
+        assert!(b != a);
+        assert!(a < c);
+        assert!(b < c);
+        assert!(!(a < a));
+        assert!(c == c);
+        assert!(c > a);
+    }
+
+    #[test]
+    fn stream_read_basic() {
+        let mut strm = make_bytes_stream(b"0123456789");
+
+        let mut s1 = strm.read(8).expect("failed to get span");
+        assert_eq!(s1.start_pos(), 0);
+        assert!(!s1.is_empty());
+        assert!(!s1.is_frozen());
+        assert_eq!(s1.start, StreamPoint::Past(0));
+        assert_eq!(s1.end, StreamPoint::Future);
+        assert_eq!(s1.len(), None);
+        assert_eq!(s1.real_len(), 4);
+        assert_eq!(s1.bytes().collect::<Vec<_>>().as_slice(),
+                   b"0123");
+        assert_eq!(s1.chars().collect::<Vec<_>>(),
+                   vec!['0','1','2','3']);
+        
+        strm.extend(&mut s1, 8).expect("failed to extend");
+        assert_eq!(s1.start_pos(), 0);
+        assert!(!s1.is_empty());
+        assert!(!s1.is_frozen());
+        assert_eq!(s1.start, StreamPoint::Past(0));
+        assert_eq!(s1.end, StreamPoint::Future);
+        assert_eq!(s1.len(), None);
+        assert_eq!(s1.real_len(), 8);
+        assert_eq!(s1.bytes().collect::<Vec<_>>().as_slice(),
+                   b"01234567");
+        assert_eq!(s1.chars().collect::<Vec<_>>(),
+                   vec!['0','1','2','3','4','5','6','7']);
+
+        strm.extend(&mut s1, 8).expect("failed to extend");
+        assert!(!s1.is_empty());
+        assert!(!s1.is_frozen());
+        assert_eq!(s1.start, StreamPoint::Past(0));
+        assert_eq!(s1.end, StreamPoint::Future);
+        assert_eq!(s1.bytes().collect::<Vec<_>>().as_slice(),
+                   b"0123456789");
+
+        strm.extend(&mut s1, 8).expect("failed to extend");
+        assert!(!s1.is_empty());
+        assert!(s1.is_frozen());
+        assert_eq!(s1.start, StreamPoint::Past(0));
+        assert_eq!(s1.end, StreamPoint::Past(10));
+    }
+
+    #[test]
+    #[should_panic]
+    fn stream_extend_old() {
+        let mut strm = make_bytes_stream(b"0123456789abc");
+        let mut s = strm.read(8).expect("failed to read");
+        let mut old_span = s.clone();
+        strm.extend(&mut s, 8).expect("failed to extend");
+        strm.extend(&mut old_span, 8).expect("this shouldn't happen");
+    }
+
+    #[test]
+    fn span_slicing() {
+        let mut strm = make_bytes_stream(b"0123456789abcdef");
+
+        // pull the first 12 bytes into a span
+        let mut s = strm.read(8).expect("failed to read");
+        strm.extend(&mut s, 8).expect("failed to extend");
+        strm.extend(&mut s, 8).expect("failed to extend");
+
+        // subslicing tests
+        let s1 = s.subspan(..4);
+        let s2 = s.subspan(4..);
+        assert_eq!(s1.start, StreamPoint::Past(0));
+        assert_eq!(s1.end, StreamPoint::Past(4));
+        assert_eq!(s2.start, StreamPoint::Past(4));
+        assert_eq!(s2.end, StreamPoint::Future);
+        assert!(s1.is_frozen());
+        assert!(!s2.is_frozen());
+        assert_eq!(s.copy(..4).as_slice(), b"0123");
+        assert_eq!(s.copy(4..).as_slice(), b"456789ab");
+
+        // test to make sure relative indices work right
+        let s3 = s2.subspan(2..);
+        assert_eq!(s3.start, StreamPoint::Past(6));
+        assert_eq!(s3.end, StreamPoint::Future);
+        assert_eq!(s2.copy(2..).as_slice(), b"6789ab");
     }
 }
