@@ -560,8 +560,11 @@ impl Subspan<Range<usize>> for Span {
             // we can use the start pos directly since we already adjusted for
             // the chunk's start position
             let slice =
-                if chunk.data.len() <= to_copy { &((*chunk.data)[start_pos..]) }
-                else { &((*chunk.data)[start_pos..to_copy]) };
+                if (chunk.data.len() - start_pos) <= to_copy {
+                    &((*chunk.data)[start_pos..])
+                } else {
+                    &((*chunk.data)[start_pos..start_pos+to_copy])
+                };
             res.extend(slice);
 
             // later chunks just start from the beginning
@@ -577,11 +580,11 @@ impl Subspan<Range<usize>> for Span {
 
 impl Subspan<RangeTo<usize>> for Span {
     fn subspan(&self, range: RangeTo<usize>) -> Span {
-        self.subspan(self.start_pos()..range.end)
+        self.subspan(0..range.end)
     }
 
     fn copy(&self, range: RangeTo<usize>) -> Vec<u8> {
-        self.copy(self.start_pos()..range.end)
+        self.copy(0..range.end)
     }
 }
 
@@ -594,7 +597,12 @@ impl Subspan<RangeFrom<usize>> for Span {
                       - self.start_pos()
         };
         let mut s = self.subspan(range.start..length);
-        s.end = StreamPoint::Future;
+
+        if self.end == StreamPoint::Future {
+            s.end = StreamPoint::Future;
+        } else {
+            s.end = self.end;
+        }
         s
     }
 
@@ -900,6 +908,12 @@ mod test {
         let temp = s2.subspan(2..);
         let templ = temp.real_len();
         assert_eq!(templ, 6);
+        assert_eq!(temp.start, StreamPoint::Past(6));
+        assert_eq!(temp.end, StreamPoint::Future);
         assert_eq!(s2.subspan(..).real_len(), 8);
+
+        let temp = s2.subspan(..2);
+        assert_eq!(temp.start, StreamPoint::Past(4));
+        assert_eq!(temp.end, StreamPoint::Past(6));
     }
 }
