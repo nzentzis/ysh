@@ -302,5 +302,18 @@ mod tests {
                                     Value::Symbol(Identifier::new("-l"))]),
                                 link: None }],
                         terminals: vec![TerminalMode::ReplaceFile(String::from("test"))]}));
+        assert_eq!(pipeline("(true false true)".as_bytes()),
+            IResult::Done(&b""[..],
+                    Pipeline {
+                        elements: vec![
+                            PipelineComponent {
+                                xform: Transformer(vec![
+                                   Value::List(
+                                       vec![Value::Boolean(true),
+                                            Value::Boolean(false),
+                                            Value::Boolean(true)])]),
+                                link: None
+                            }],
+                        terminals: vec![]}));
     }
 }

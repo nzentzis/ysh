@@ -65,6 +65,7 @@ pub fn execute(val: Value, args: Vec<Value>, env: &Environment) -> Value {
     if val.is_executable() {
         val.execute(args).unwrap()
     } else {
+        /*
         // stringify it and try finding it
         let search_obj = val.to_owned().into_str();
         let search_res = find_command(&search_obj);
@@ -77,5 +78,10 @@ pub fn execute(val: Value, args: Vec<Value>, env: &Environment) -> Value {
         } else {
             unimplemented!()
         }
+        */
+        let mut args = args;
+        let mut l = vec![val];
+        l.append(&mut args);
+        Value::List(l)
     }
 }

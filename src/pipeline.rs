@@ -127,6 +127,19 @@ fn plan_transform(mut xform: Transformer)
         }
     }
 
+    // if it's not a string or symbol, just return it
+    match &first {
+        &Value::Symbol(_) => {},
+        &Value::Str(_) => {},
+        _ => {
+            if xform.0.len() == 1 {
+                return Ok(PlanElement::Expression(first));
+            } else {
+                return Ok(PlanElement::Expression(Value::List(xform.0)));
+            }
+        }
+    }
+
     // try looking up as a command
     let cmd = first.into_str();
     let mut opts = find_command(&cmd);
