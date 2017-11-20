@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::boxed::Box;
 
 use environment::Environment;
+use numeric::*;
 
 #[derive(Clone)]
 pub enum Executable {
@@ -26,7 +27,7 @@ impl Executable {
 #[derive(Clone)]
 pub enum Value {
     Boolean(bool),
-    Number(i64), // TODO: more arithmetic tower support
+    Number(Number), // TODO: more arithmetic tower support
     Str(String),
     Symbol(Identifier),
     List(Vec<Value>),
@@ -122,7 +123,7 @@ impl ValueLike for Value {
         match self {
             &Value::Boolean(true)       => String::from("true"),
             &Value::Boolean(false)      => String::from("false"),
-            &Value::Number(n)           => format!("{}", n),
+            &Value::Number(ref n)       => format!("{}", n),
             &Value::Str(ref s)          => s.to_owned(),
             &Value::Symbol(ref id)      => (*(id.0)).to_owned(),
             &Value::List(ref l)         => {
@@ -194,7 +195,7 @@ impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
         match (self, other) {
             (&Value::Boolean(x),     &Value::Boolean(y))    => x == y,
-            (&Value::Number(x),      &Value::Number(y))     => x == y,
+            (&Value::Number(ref x),  &Value::Number(ref y)) => x == y,
             (&Value::Str(ref x),     &Value::Str(ref y))    => x == y,
             (&Value::Symbol(ref x),  &Value::Symbol(ref y)) => x == y,
             (&Value::List(ref x),    &Value::List(ref y))   => x == y,
@@ -211,7 +212,7 @@ impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
             &Value::Boolean(b)    => write!(f, "<bool:{}>", b),
-            &Value::Number(n)     => write!(f, "<num:{}>", n),
+            &Value::Number(ref n) => write!(f, "<num:{}>", n),
             &Value::Str(ref s)    => write!(f, "<str:\"{}\">", s),
             &Value::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
             &Value::List(ref v)   => write!(f, "{:?}", v),

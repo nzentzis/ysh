@@ -5,6 +5,7 @@ extern crate termion;
 extern crate libc;
 extern crate nix;
 
+mod numeric;
 #[allow(dead_code)] mod data;
 #[allow(dead_code)] mod globals;
 #[allow(dead_code)] mod environment;
