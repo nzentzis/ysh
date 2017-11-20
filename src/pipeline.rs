@@ -115,7 +115,14 @@ fn plan_transform(mut xform: Transformer)
         // if we find it, use that
         if let Some(r) = r {
             if let &Value::Function(_,_) = &*r {
-                return Ok(PlanElement::Expression(Value::List(xform.0)));
+                // only convert to a list when there's more than one element
+                if xform.0.len() == 1 {
+                    return Ok(PlanElement::Expression((&*r).to_owned()));
+                } else {
+                    return Ok(PlanElement::Expression(Value::List(xform.0)));
+                }
+            } else {
+                return Ok(PlanElement::Expression((&*r).to_owned()));
             }
         }
     }
@@ -394,48 +401,40 @@ impl TransformEvaluation {
     /// Generate a transformed expression from a basic one using the following
     /// rules:
     /// 
-    /// 1. If the transform value's first element is executable:
+    /// 1. If the transform value is executable:
     ///     a. Convert it to a sequence
     ///     b. Append the inner value
     ///     c. Return the result
-    /// 2. Evaluate the transform. If the first element of the result is
-    ///    executable, perform steps a, b, and c on the result.
+    /// 2. Evaluate the transform. If the result is executable, perform steps
+    ///    a, b, and c on the result.
     /// 3. Use the transform value and ignore the input
     fn apply_value_xform(xform: Value, inner: Value) -> Value {
         use std::ops::Deref;
-        println!("1: {:?} {:?}", xform, inner);
-
-        if let Some(x) = xform.first() {
-            println!("2: {:?}", x);
-            if x.is_executable() {
-                return Value::List(vec![xform.clone(), inner])
-            } else if let &Value::Symbol(ref s) = x {
-                // try looking up the symbol to get an executable result
-                let val = global().get(s.0.deref());
-                match val {
-                    Some(ref x) if x.is_executable() => {
-                        let mut arr = vec![x.deref().to_owned()];
-                        arr.extend(xform.into_iter().skip(1));
-                        arr.push(inner);
-                        return Value::List(arr);
-                    },
-                    _ => {}
-                }
+        if xform.is_executable() {
+            return Value::List(vec![xform.clone(), inner])
+        } else if let &Value::Symbol(ref s) = &xform {
+            // try looking up the symbol to get an executable result
+            let val = global().get(s.0.deref());
+            match val {
+                Some(ref x) if x.is_executable() => {
+                    let mut arr = vec![x.deref().to_owned()];
+                    arr.extend(xform.into_iter().skip(1));
+                    arr.push(inner);
+                    return Value::List(arr);
+                },
+                _ => {}
             }
         }
 
         let modified_xform = xform.clone().eval_in(&mut ::environment::empty());
-        println!("3: {:?}", modified_xform);
 
         if let Some(x) = modified_xform.first() {
-            println!("4: {:?}", x);
             if x.is_executable() {
                 return Value::List(vec![modified_xform.clone(), inner]);
             }
         }
 
         // make sure to return the *original* rather than the evaluated version
-        println!("5: {:?}", xform);
         xform
     }
 
