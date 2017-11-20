@@ -63,7 +63,11 @@ impl StreamOptions {
 struct InnerStream {
     opts: StreamOptions,
     stream: LazyReadStream,
-    front: Span
+
+    /// The current frontmost span
+    /// 
+    /// If `None`, nothing has been read yet
+    front: Option<Span>
 }
 
 impl InnerStream {
@@ -71,8 +75,15 @@ impl InnerStream {
     /// 
     /// Returns `None` when no further lines are available
     fn next_line(&mut self) -> io::Result<Option<PolyLine>> {
-        let avail = self.front.clone();
-        let avail_len = self.front.real_len();
+        let front = {
+            if self.front.is_none() {
+                self.front = Some(self.stream.read(100000)?);
+            }
+            self.front.as_ref().unwrap().to_owned()
+        };
+
+        let avail = front.clone();
+        let avail_len = front.real_len();
         for (i,b) in avail.bytes().enumerate() {
             if b == b'\n' {
                 // split here
@@ -80,20 +91,20 @@ impl InnerStream {
 
                 // TODO: check that idx+1 is valid?
                 if i+1 < avail_len {
-                    self.front = self.front.subspan(i+1..);
+                    self.front = Some(front.subspan(i+1..));
                 } else {
-                    self.front = self.stream.read(512)?;
+                    self.front = Some(self.stream.read(512)?);
                 }
                 return Ok(Some(PolyLine::new_from(new_span, self.opts.clone())));
             }
         }
 
-        if self.front.is_frozen() {
+        if front.is_frozen() {
             return Ok(None);
         }
 
         // get more data and recurse
-        self.stream.extend(&mut self.front, 512)?;
+        self.stream.extend(self.front.as_mut().unwrap(), 512)?;
         self.next_line()
     }
 }
@@ -111,10 +122,9 @@ impl PolyStream {
     /// It's not suitable for pulling data from stdin.
     pub fn from_fd(fd: RawFd, opts: StreamOptions) -> io::Result<Self> {
         let mut strm = LazyReadStream::new(fd)?;
-        let front = strm.read(1000000)?;
         Ok(PolyStream {
             inner: InnerStream {
-                opts, front,
+                opts, front: None,
                 stream: strm,
             }
         })
@@ -123,10 +133,9 @@ impl PolyStream {
     /// Open a stream from stdin
     pub fn from_stdin(opts: StreamOptions) -> io::Result<Self> {
         let mut strm = LazyReadStream::stdin()?;
-        let front = strm.read(1000000)?;
         Ok(PolyStream {
             inner: InnerStream {
-                opts, front,
+                opts, front: None,
                 stream: strm
             }
         })
