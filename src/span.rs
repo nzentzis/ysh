@@ -65,7 +65,10 @@ struct StreamChunk {
     next: Mutex<Option<Arc<StreamChunk>>>,
 
     /// Data for this chunk
-    chunk: Arc<Chunk>
+    /// 
+    /// If `None`, the chunk isn't populated yet. This *must* be populated at
+    /// all times for every chunk but the first.
+    chunk: Mutex<Option<Arc<Chunk>>>,
 }
 
 impl StreamChunk {
@@ -74,8 +77,15 @@ impl StreamChunk {
         let chunk = Chunk::new_from_read(input, offset)?;
         Ok(StreamChunk {
             next: Mutex::new(None),
-            chunk: Arc::new(chunk)
+            chunk: Mutex::new(Some(Arc::new(chunk)))
         })
+    }
+
+    fn new_empty() -> Self {
+        StreamChunk {
+            next: Mutex::new(None),
+            chunk: Mutex::new(None)
+        }
     }
 
     /// Add another stream chunk to this one if it's the head of the chain
@@ -95,7 +105,7 @@ impl StreamChunk {
         let present = w.is_some();
         if present { Ok(Arc::clone(w.as_ref().unwrap())) }
         else {
-            let new = Arc::new(source.read_chunk()?);
+            let new = Arc::new(source.read_stream_chunk()?);
             *w = Some(Arc::clone(&new));
             Ok(new)
         }
@@ -137,7 +147,7 @@ impl ReadSource {
     }
 
     /// Read a chunk from the stream with a given "previous" pointer
-    fn read_chunk(&mut self) -> io::Result<StreamChunk> {
+    fn read_stream_chunk(&mut self) -> io::Result<StreamChunk> {
         match self {
             &mut ReadSource::FromFile {ref mut f, ref mut offs} =>
                 StreamChunk::new_from_read(f, offs),
@@ -145,6 +155,18 @@ impl ReadSource {
                 StreamChunk::new_from_read(f, offs),
             &mut ReadSource::FromReadBox {ref mut r, ref mut offs} =>
                 StreamChunk::new_from_read(r, offs)
+        }
+    }
+
+    /// Read a raw chunk from the stream
+    fn read_chunk(&mut self) -> io::Result<Chunk> {
+        match self {
+            &mut ReadSource::FromFile {ref mut f, ref mut offs} =>
+                Chunk::new_from_read(f, offs),
+            &mut ReadSource::FromChannel {ref mut f, ref mut offs} =>
+                Chunk::new_from_read(f, offs),
+            &mut ReadSource::FromReadBox {ref mut r, ref mut offs} =>
+                Chunk::new_from_read(r, offs)
         }
     }
 }
@@ -662,33 +684,52 @@ impl LazyReadStream {
         LazyReadStream::new_from_source(ReadSource::stdin())
     }
 
+    /// Get the current chunk
+    /// 
+    /// If it's not populated, this will read data into the stream
+    fn get_chunk(&self) -> io::Result<Arc<Chunk>> {
+        let mut c = self.head.chunk.lock().unwrap();
+        if let &Some(ref c) = &*c {
+            return Ok(Arc::clone(c));
+        }
+
+        // not populated - read some in
+        let chunk = {
+            let mut src = self.source.lock().unwrap();
+            src.read_chunk()? };
+
+        let rv = Arc::new(chunk);
+        *c = Some(Arc::clone(&rv));
+        Ok(rv)
+    }
+
     /// Try to read up to N bytes from the stream into a span
     /// 
     /// This will read at most one new chunk from the underlying stream. If the
     /// stream is already at EOF, this will return an empty `Span`. You can
     /// check for this condition using `Span::is_empty` or `Span::len`.
     pub fn read(&mut self, len: usize) -> io::Result<Span> {
-        let mut source = self.source.lock().unwrap();
         let pos = self.position;
 
         // if the head is empty, we're at EOF
-        if self.head.chunk.data.len() == 0 {
+        let chunk = self.get_chunk()?;
+        if chunk.data.len() == 0 {
             return Ok(Span {
-                chunks: vec![Arc::clone(&self.head.chunk)],
+                chunks: vec![chunk],
                 start: StreamPoint::Past(pos),
                 end: StreamPoint::Past(pos),
             });
         }
 
         let desired_end = pos + len;
-        let head_end = self.head.chunk.start + self.head.chunk.data.len();
+        let head_end = chunk.start + chunk.data.len();
 
         // it's okay to deliver partial spans
         let span_end = if desired_end < head_end { StreamPoint::Past(desired_end) }
                        else { StreamPoint::Future };
         let read_len = if desired_end < head_end { len } else { head_end - pos };
         let res = Span {
-            chunks: vec![Arc::clone(&self.head.chunk)],
+            chunks: vec![chunk],
             start: StreamPoint::Past(pos),
             end: span_end
         };
@@ -701,6 +742,7 @@ impl LazyReadStream {
         // This will always happen if the read length is above the remaining
         // head length
         if self.position == head_end {
+            let mut source = self.source.lock().unwrap();
             self.head = self.head.advance(&mut *source)?;
         }
 
@@ -737,11 +779,11 @@ impl LazyReadStream {
     }
 
     fn new_from_source(mut src: ReadSource) -> io::Result<Self> {
-        // pull the first block from the read source
-        let block = src.read_chunk()?;
+        // use an empty first chunk
+        let chunk = StreamChunk::new_empty();
 
         Ok(LazyReadStream {
-            head: Arc::new(block),
+            head: Arc::new(chunk),
             position: 0,
             source: Arc::new(Mutex::new(src))
         })
@@ -792,17 +834,23 @@ mod test {
             r: Box::new(r),
             offs: 0 };
 
-        let c = strm.read_chunk().expect("failed to read chunk 1");
+        let c = strm.read_stream_chunk().expect("failed to read chunk 1");
         assert!(c.next.lock().unwrap().is_none());
-        assert_eq!(c.chunk.start, 0);
-        assert_eq!(Vec::from(c.chunk.data.clone()).as_slice(), &test[..4]);
+        assert_eq!(c.chunk.lock().unwrap().as_ref().unwrap().start, 0);
+        assert_eq!(
+            Vec::from(c.chunk.lock().unwrap().as_ref().unwrap().data.clone()).as_slice(),
+            &test[..4]);
 
         let c2 = c.advance(&mut strm).expect("failed to advance");
         assert!(c.next.lock().unwrap().is_some());
-        assert_eq!(c.chunk.start, 0);
-        assert_eq!(Vec::from(c.chunk.data.clone()).as_slice(), &test[..4]);
-        assert_eq!(c2.chunk.start, 4);
-        assert_eq!(Vec::from(c2.chunk.data.clone()).as_slice(), &test[4..8]);
+        assert_eq!(c.chunk.lock().unwrap().as_ref().unwrap().start, 0);
+        assert_eq!(
+            Vec::from(c.chunk.lock().unwrap().as_ref().unwrap().data.clone()).as_slice(),
+            &test[..4]);
+        assert_eq!(c2.chunk.lock().unwrap().as_ref().unwrap().start, 4);
+        assert_eq!(
+            Vec::from(c2.chunk.lock().unwrap().as_ref().unwrap().data.clone()).as_slice(),
+            &test[4..8]);
     }
 
     #[test]
