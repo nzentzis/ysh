@@ -8,8 +8,8 @@ use nix::unistd;
 
 use data::*;
 use globals::job_control;
-use evaluate::{execute, find_command, Evaluable};
-use environment::global;
+use evaluate::find_command;
+use environment::{global, empty};
 use jobs::{Command, Job, IoChannel};
 use stream::*;
 
@@ -108,41 +108,42 @@ pub enum PlanningError {
 fn plan_transform(mut xform: Transformer)
         -> Result<PlanElement, PlanningError> {
     let first = xform.0[0].clone();
-    if let Value::Symbol(ref s) = first {
+    if let Some(s) = first.get_symbol() {
         // try looking it up
         let r = global().get(&*(s.0));
 
         // if we find it, use that
         if let Some(r) = r {
-            if let &Value::Function(_,_) = &*r {
+            if r.is_executable() {
                 // only convert to a list when there's more than one element
                 if xform.0.len() == 1 {
-                    return Ok(PlanElement::Expression((&*r).to_owned()));
+                    return Ok(PlanElement::Expression(r));
                 } else {
-                    return Ok(PlanElement::Expression(Value::List(xform.0)));
+                    return Ok(PlanElement::Expression(BasicValue::list(xform.0)));
                 }
             } else {
-                return Ok(PlanElement::Expression((&*r).to_owned()));
+                return Ok(PlanElement::Expression(r));
             }
         }
     }
 
     // if it's not a string or symbol, just return it
-    match &first {
-        &Value::Symbol(_) => {},
-        &Value::Str(_) => {},
-        _ => {
+    let cmd: String =
+        if let Some(s) = first.get_string() { s }
+        else {
             if xform.0.len() == 1 {
                 return Ok(PlanElement::Expression(first));
             } else {
-                return Ok(PlanElement::Expression(Value::List(xform.0)));
+                return Ok(PlanElement::Expression(BasicValue::list(xform.0)));
             }
-        }
-    }
+        };
 
     // try looking up as a command
-    let cmd = first.into_str();
-    let mut opts = find_command(&cmd);
+    let mut opts = if let Some(cmds) = find_command(&cmd) { cmds }
+                   else {
+                       eprintln!("ysh: failed to locate command");
+                       return Err(PlanningError::NotFound);
+                   };
 
     if opts.len() > 1 {
         eprintln!("ysh: more than one candidate for '{}'", cmd);
@@ -311,7 +312,6 @@ impl Plan {
                     // we have to flush the plan buffer if there's anything
                     // there
                     if !plan_buffer.is_empty() {
-                        println!("buffer: {:?}", plan_buffer);
                         // generate a pipe
                         let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
                                            .expect("cannot generate pipes");
@@ -328,10 +328,13 @@ impl Plan {
 
                     // TODO: redirect or handle stderr
                     // TODO: handle spawn failure
+                    // TODO: handle arg evaluation failure
                     let cmd = Command::new(exec)
                                       .invoked_using(invoked_name)
                                       .args(args.into_iter()
-                                                .flat_map(|x| x.into_args()))
+                                                .flat_map(|x| x.evaluate(&empty())
+                                                               .unwrap()
+                                                               .into_args()))
                                       .stdin(if last_output == 0 { IoChannel::Inherited }
                                              else {IoChannel::Specific(last_output)})
                                       .stdout(if fwd_stdout { IoChannel::Inherited }
@@ -424,8 +427,8 @@ impl TransformEvaluation {
     fn apply_value_xform(xform: Value, inner: Value) -> Value {
         use std::ops::Deref;
         if xform.is_executable() {
-            return Value::List(vec![xform.clone(), inner])
-        } else if let &Value::Symbol(ref s) = &xform {
+            return BasicValue::list(vec![xform, inner])
+        } else if let Some(s) = xform.get_symbol() {
             // try looking up the symbol to get an executable result
             let val = global().get(s.0.deref());
             match val {
@@ -433,17 +436,19 @@ impl TransformEvaluation {
                     let mut arr = vec![x.deref().to_owned()];
                     arr.extend(xform.into_iter().skip(1));
                     arr.push(inner);
-                    return Value::List(arr);
+                    return BasicValue::list(arr);
                 },
                 _ => {}
             }
         }
 
-        let modified_xform = xform.clone().eval_in(&mut ::environment::empty());
+        let modified_xform = xform.evaluate(&::environment::empty());
 
-        if let Some(x) = modified_xform.first() {
-            if x.is_executable() {
-                return Value::List(vec![modified_xform.clone(), inner]);
+        if let Ok(m) = modified_xform {
+            if let Some(x) = m.first() {
+                if x.is_executable() {
+                    return BasicValue::list(vec![m.clone(), inner]);
+                }
             }
         }
 
@@ -463,8 +468,8 @@ impl TransformEvaluation {
         // since we the pipeline gets built from the inside (left element) out
         // (toward the right) we need to keep track of the current element at
         // all times.
-        let mut innermost = Value::wrap(
-            TransformEvaluation::build_innermost_elem(input, first));
+        let mut innermost =
+            Value::new(TransformEvaluation::build_innermost_elem(input, first));
 
         // TODO: Support for killing active transforms
         for elem in elements.into_iter() {
@@ -480,7 +485,8 @@ impl TransformEvaluation {
         let out = output;
         let expr = innermost;
         let hdl = thread::spawn(move || {
-            let res = expr.eval_in(&mut ::environment::empty());
+            // TODO: error handling
+            let res = expr.evaluate(&::environment::empty()).unwrap();
             match out {
                 EvalOutput::PrettyStdout => {
                     println!("{}", res.into_str());

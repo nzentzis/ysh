@@ -120,7 +120,7 @@ named!(numeric_value<Value>,
                map!(real, Number::real) |
                map!(integer, Number::int)
                ),
-            Value::Number)
+            |x| Value::new(BasicValue::Number(x)))
        );
 
 /// Parse an identifier
@@ -164,17 +164,17 @@ named!(paren_list<Vec<Value>>,
 named!(value<Value>, alt_complete!(
         map!(alt!(value!(true, tag!(b"true")) |
                   value!(false, tag!(b"false"))),
-             Value::Boolean) |
+             |x| Value::new(BasicValue::Boolean(x))) |
         numeric_value |
-        map!(quoted_string, Value::Str) |
+        map!(quoted_string, BasicValue::str) |
         map!(gen_ident, |s| {
             if s.chars().all(is_valid_ident_char) {
-                Value::Symbol(Identifier::from(s))
+                Value::new(BasicValue::Symbol(Identifier::from(s)))
             } else {
-                Value::Str(s)
+                BasicValue::str(s)
             }
         }) |
-        map!(paren_list, Value::List)
+        map!(paren_list, BasicValue::list)
         )
        );
 

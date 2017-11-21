@@ -152,15 +152,11 @@ impl Iterator for LineIterator {
     fn next(&mut self) -> Option<Value> {
         self.stream.next_line()
                    .expect("I/O read error") // TODO: handle
-                   .map(|l| Value::Wrapped(Arc::new(l)))
+                   .map(Value::new)
     }
 }
 
 impl ValueLike for PolyStream {
-    // simple stuff
-    fn is_executable(&self) -> bool {false}
-    fn execute(&self, args: Vec<Value>) -> Result<Value, Vec<Value>> {Err(args)}
-
     fn into_seq(&self) -> Vec<Value> { self.into_iter().collect() }
 
     fn into_iter(&self) -> ValueIteratorBox {
@@ -175,7 +171,7 @@ impl ValueLike for PolyStream {
         unimplemented!()
     }
 
-    fn first(&self) -> Option<&Value> {
+    fn first(&self) -> Option<&ValueLike> {
         unimplemented!()
     }
 }
@@ -200,10 +196,6 @@ impl PolyLine {
 }
 
 impl ValueLike for PolyLine {
-    // simple stuff
-    fn is_executable(&self) -> bool {false}
-    fn execute(&self, args: Vec<Value>) -> Result<Value, Vec<Value>> {Err(args)}
-
     fn into_seq(&self) -> Vec<Value> { self.into_iter().collect() }
 
     fn into_iter(&self) -> ValueIteratorBox {
@@ -219,7 +211,7 @@ impl ValueLike for PolyLine {
         unimplemented!()
     }
 
-    fn first(&self) -> Option<&Value> {
+    fn first(&self) -> Option<&ValueLike> {
         unimplemented!()
     }
 }

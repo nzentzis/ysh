@@ -7,13 +7,13 @@ use data::*;
 /// 
 /// While this exists, the environment cannot be accessed.
 pub struct ExclusiveEnvironment<'a> {
-    map: &'a mut HashMap<String, Arc<Value>>
+    map: &'a mut HashMap<String, Value>
 }
 
 impl<'a> ExclusiveEnvironment<'a> {
     /// Add a mapping to the environment
     pub fn set<S: AsRef<str>>(&mut self, key: S, val: Value) {
-        self.map.insert(String::from(key.as_ref()), Arc::new(val));
+        self.map.insert(String::from(key.as_ref()), val);
     }
 }
 
@@ -31,7 +31,7 @@ impl<'a> ExclusiveEnvironment<'a> {
 /// subshells. Their copies allow them to reference the enclosing environment
 /// without wasting memory on redundant copies of the environment.
 pub struct Environment {
-    mappings: Arc<HashMap<String, Arc<Value>>>
+    mappings: Arc<HashMap<String, Value>>
 }
 
 impl Environment {
@@ -50,14 +50,15 @@ impl Environment {
     /// 
     /// If not present, attempt to retrieve it from the global environment
     /// instead
-    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Arc<Value>> {
-        self.mappings.get(key.as_ref()).map(Arc::clone)
+    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Value> {
+        self.mappings.get(key.as_ref())
+            .map(|x| x.clone())
             .or_else(|| global().get(key))
     }
 }
 
 struct GlobalMapping {
-    value: Arc<Value>,
+    value: Value,
     mutable: bool
 }
 
@@ -78,15 +79,16 @@ impl GlobalEnvironment {
         GlobalEnvironment { mappings: RwLock::new(HashMap::new()) }
     }
 
-    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Arc<Value>> {
+    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Value> {
         let r = self.mappings.read().unwrap();
-        r.get(key.as_ref()).map(|r| Arc::clone(&r.value))
+        r.get(key.as_ref())
+         .map(|r| r.value.clone())
     }
 
     fn set_key<K: AsRef<str>>(&self, key: K, val: Value, mutable: bool) {
         use std::collections::hash_map::Entry;
 
-        let mapping = GlobalMapping { value: Arc::new(val), mutable };
+        let mapping = GlobalMapping { value: val, mutable };
 
         let mut w = self.mappings.write().unwrap();
         let entry = w.entry(key.as_ref().to_owned());

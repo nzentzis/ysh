@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use data::*;
 use environment::{Environment, empty, global};
 
+/*
 pub trait Evaluable {
     /// Try to evaluate this value in the given environment
     fn eval_in(self, env: &mut Environment) -> Value;
@@ -44,21 +45,26 @@ impl Evaluable for Value {
         }
     }
 }
+*/
 
 /// Try to find a command using values from the active environment
-pub fn find_command(cmd: &str) -> Vec<PathBuf> {
+pub fn find_command(cmd: &str) -> Option<Vec<PathBuf>> {
     if let Some(locate) = global().get("shell/locate") {
-        execute((*locate).clone(), vec![Value::Str(cmd.to_owned())], &empty())
-            .into_iter()
-            .map(|o| PathBuf::from(o.into_str()))
-            .collect()
+        locate.execute(&empty(), &vec![BasicValue::str(cmd)])
+            .ok()
+            .map(|x| {
+                x.into_iter()
+                 .map(|o| PathBuf::from(o.into_str()))
+                 .collect()
+            })
     } else {
         // they somehow unbound shell/locate
         eprintln!("ysh: shell/locate not bound. try running `sys/recover`");
-        Vec::new()
+        None
     }
 }
 
+/*
 /// Evalute a value in an executable context
 pub fn execute(val: Value, args: Vec<Value>, env: &Environment) -> Value {
     // TODO: handle lexical scoping
@@ -85,3 +91,4 @@ pub fn execute(val: Value, args: Vec<Value>, env: &Environment) -> Value {
         Value::List(l)
     }
 }
+*/

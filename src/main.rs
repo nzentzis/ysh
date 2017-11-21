@@ -32,7 +32,7 @@ use nix::sys::signal;
 
 use environment::{Environment, global, empty};
 use pipeline::{Plan, PlanningError};
-use data::{Value, ValueLike, Executable};
+use data::{Value, ValueLike, BasicValue, Executable, EvalResult};
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 
@@ -42,27 +42,26 @@ fn get_initial_paths() -> Value {
     match env::var_os("PATH") {
         // TODO: add Bytes type and generate those here
         Some(paths) =>
-            Value::List(env::split_paths(&paths)
+            BasicValue::list(env::split_paths(&paths)
                             .map(|p| p.to_str().unwrap().to_owned())
-                            .map(Value::Str)
-                            .collect()),
-        None => Value::List(vec![Value::Str(String::from("/bin")),
-                                 Value::Str(String::from("/usr/bin")),
-                                 Value::Str(String::from("/usr/local/bin"))])
+                            .map(BasicValue::str)),
+        None => BasicValue::list(vec![BasicValue::str("/bin"),
+                                      BasicValue::str("/usr/bin"),
+                                      BasicValue::str("/usr/local/bin")])
     }
 }
 
-fn locate_executable(env: &Environment, args: &[Value]) -> Value {
+fn locate_executable(env: &Environment, args: &[Value]) -> EvalResult {
     use std::path::Path;
 
     if args.len() == 0 {
         // allow use as a transformer
-        return Value::Function(empty(), Executable::native(locate_executable));
+        return Ok(BasicValue::function(
+                empty(), Executable::native(locate_executable)));
     }
 
     let paths = if let Some(p) = env.get("path") { p }
-                else { return Value::empty() };
-    let paths = (*paths).to_owned();
+                else { return Ok(BasicValue::empty()) };
     let paths: Vec<_> = paths.into_iter().map(|x| x.into_str()).collect();
     
     // search for the requested files
@@ -73,48 +72,49 @@ fn locate_executable(env: &Environment, args: &[Value]) -> Value {
             let pth = Path::new(p).join(&f);
             if pth.exists() {
                 // TODO: handle bytes conversion
-                res.push(Value::Str(pth.to_str().unwrap().to_owned()));
+                res.push(BasicValue::str(pth.to_str().unwrap()));
                 break;
             }
         }
     }
-    Value::List(res)
+    Ok(BasicValue::list(res))
 }
 
 fn init_environment() {
     library::initialize();
 
     let env = global();
-    env.set("print", Value::Function(empty(),
+    env.set("print", BasicValue::function(empty(),
         Executable::native(|_, args| {
-            println!("{:?}", args);
-            Value::empty()
+            //println!("{:?}", args);
+            println!("value!");
+            Ok(BasicValue::empty())
         })));
 
-    env.set("print-lines", Value::Function(empty(),
+    env.set("print-lines", BasicValue::function(empty(),
         Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
                     println!("({})", i.into_str());
                 }
             }
-            Value::empty()
+            Ok(BasicValue::empty())
         })));
 
-    env.set("shell/locate", Value::Function(empty(),
+    env.set("shell/locate", BasicValue::function(empty(),
         Executable::native(locate_executable)));
 
-    env.set("exit", Value::Function(empty(),
+    env.set("exit", BasicValue::function(empty(),
         Executable::native(|_,_| {
             RUN_SHELL.store(false, Ordering::Relaxed);
-            Value::empty() })));
+            Ok(BasicValue::empty()) })));
 
     // recovery function to restore the system environment in case something got
     // seriously borked
-    env.set_immut("sys/recover", Value::Function(empty(),
+    env.set_immut("sys/recover", BasicValue::function(empty(),
         Executable::native(|_,_| {
             init_environment();
-            Value::empty() })));
+            Ok(BasicValue::empty()) })));
 
     // set executable path
     env.set("path", get_initial_paths());
