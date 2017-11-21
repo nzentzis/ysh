@@ -10,6 +10,8 @@ mod numeric;
 #[allow(dead_code)] mod globals;
 #[allow(dead_code)] mod environment;
 
+mod library;
+
 #[allow(dead_code)] mod stream;
 #[allow(dead_code)] mod span;
 
@@ -80,6 +82,8 @@ fn locate_executable(env: &Environment, args: &[Value]) -> Value {
 }
 
 fn init_environment() {
+    library::initialize();
+
     let env = global();
     env.set("print", Value::Function(empty(),
         Executable::native(|_, args| {
