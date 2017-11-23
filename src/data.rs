@@ -108,7 +108,31 @@ impl ValueLike for Value {
 #[derive(Debug, Clone)]
 pub enum EvalError {
     Unknown,
+    InvalidOperation(&'static str),
     TypeError(String)
+}
+
+impl ::std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match self {
+            &EvalError::Unknown =>
+                write!(f, "Unknown evaluation error"),
+            &EvalError::InvalidOperation(ref s) =>
+                write!(f, "Invalid operation: {}", s),
+            &EvalError::TypeError(ref s) =>
+                write!(f, "Type error: {}", s),
+        }
+    }
+}
+
+impl ::std::error::Error for EvalError {
+    fn description(&self) -> &str {
+        match self {
+            &EvalError::Unknown => &"unknown evaluation error",
+            &EvalError::InvalidOperation(_) => &"invalid operation",
+            &EvalError::TypeError(_) => &"type error",
+        }
+    }
 }
 
 /// Trait for basic behavior which applies to all value-like types. If possible,
@@ -149,9 +173,7 @@ pub trait ValueLike : Send + Sync {
     fn into_args(&self) -> Vec<String>;
 
     /// Evaluate this value-like object in a given context
-    fn evaluate(&self, env: &Environment) -> EvalResult {
-        Err(EvalError::Unknown)
-    }
+    fn evaluate(&self, env: &Environment) -> EvalResult;
 
     /// Whether the value can be executed with arguments
     fn is_executable(&self) -> bool { false }
@@ -161,7 +183,7 @@ pub trait ValueLike : Send + Sync {
     /// If the value is not executable, return Err() with the original
     /// arguments.
     fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
-        Err(EvalError::Unknown)
+        Err(EvalError::InvalidOperation("execution not supported"))
     }
 
     /// Get the first element of the object's sequential form

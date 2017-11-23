@@ -163,8 +163,12 @@ impl ValueLike for PolyStream {
         Box::new(LineIterator { stream: self.inner.clone() })
     }
 
+    fn evaluate(&self, env: &::environment::Environment) -> EvalResult {
+        Ok(Value::new(PolyStream { inner: self.inner.clone() }))
+    }
+
     fn into_str(&self) -> String {
-        unimplemented!()
+        String::from("<polystream>")
     }
 
     fn into_args(&self) -> Vec<String> {
@@ -200,6 +204,10 @@ impl ValueLike for PolyLine {
 
     fn into_iter(&self) -> ValueIteratorBox {
         unimplemented!()
+    }
+
+    fn evaluate(&self, env: &::environment::Environment) -> EvalResult {
+        Ok(Value::new(self.clone()))
     }
 
     fn into_str(&self) -> String {

@@ -2,6 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::os::unix::prelude::*;
 use std::process;
+use std::error::Error;
 
 use nix::fcntl;
 use nix::unistd;
@@ -287,7 +288,7 @@ impl Plan {
     /// 
     /// Pipelines are executed by joining all contiguous shell components
     /// together and launching each block of contiguous operations in a thread.
-    pub fn launch(mut self, background: bool) -> ActivePipeline {
+    pub fn launch(mut self, background: bool) -> Option<ActivePipeline> {
         // fd of the last output
         let mut last_output = self.get_input_fd();
 
@@ -318,7 +319,15 @@ impl Plan {
                         let eval = TransformEvaluation::launch(
                                         last_output, plan_buffer.drain(..),
                                         EvalOutput::Descriptor(i));
-                        transforms.push(eval);
+
+                        if let Some(eval) = eval {
+                            transforms.push(eval);
+                        } else {
+                            // handle launch failure
+                            // currently just close FDs and abort
+                            // TODO: close non-stdin FDs here
+                            return None;
+                        }
                         last_output = o;
                     }
 
@@ -370,12 +379,17 @@ impl Plan {
 
             let eval = TransformEvaluation::launch(
                 last_output, plan_buffer.drain(..), out);
-            transforms.push(eval);
+            if let Some(eval) = eval {
+                transforms.push(eval);
+            } else {
+                // TODO close output FDs here
+                return None;
+            }
         }
 
-        ActivePipeline { job,
+        Some(ActivePipeline { job,
             xforms: transforms
-        }
+        })
     }
 }
 
@@ -456,7 +470,8 @@ impl TransformEvaluation {
         xform
     }
 
-    fn launch<I>(input: RawFd, elements: I, output: EvalOutput) -> TransformHandle
+    fn launch<I>(input: RawFd, elements: I, output: EvalOutput)
+            -> Option<TransformHandle>
             where I: IntoIterator<Item=PlanElement> {
         use std::thread;
         use std::io::prelude::*;
@@ -481,12 +496,28 @@ impl TransformEvaluation {
             };
         }
 
+        // macroexpand the expression before evaluating it
+        let expr = match innermost.macroexpand() {
+            Ok(r) => r,
+            Err(e) => {
+                println!("ysh: runtime error while expanding macro: {}",
+                         e.description());
+                return None;
+            }
+        };
+
         // launch the transform
         let out = output;
-        let expr = innermost;
         let hdl = thread::spawn(move || {
             // TODO: error handling
-            let res = expr.evaluate(&::environment::empty()).unwrap();
+            let res = expr.evaluate(&::environment::empty());
+            let res = match res {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("ysh: {:?} - {}", expr, e);
+                    return;
+                }
+            };
             match out {
                 EvalOutput::PrettyStdout => {
                     println!("{}", res.into_str());
@@ -498,9 +529,9 @@ impl TransformEvaluation {
             }
         });
 
-        TransformHandle {
+        Some(TransformHandle {
             handle: hdl
-        }
+        })
     }
 }
 

@@ -208,6 +208,8 @@ fn main() {
         };
         println!("\r{:?}", plan);
 
-        plan.launch(false).wait();
+        if let Some(x) = plan.launch(false) {
+            x.wait();
+        }
     }
 }
