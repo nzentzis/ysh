@@ -4,7 +4,6 @@ use data::*;
 
 fn fn_add(env: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
-    // TODO: use type trait system
     // TODO: handle results using exceptions
     let mut ns = Vec::new();
     for i in args.iter() {

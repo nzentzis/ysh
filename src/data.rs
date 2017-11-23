@@ -32,6 +32,7 @@ pub enum BasicValue {
     Symbol(Identifier),
     List(Vec<Value>),
     Function(Environment, Executable),
+    Macro(Environment, Executable),
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
@@ -39,36 +40,69 @@ pub type ValueIteratorBox = Box<Iterator<Item=Value>>;
 pub type EvalResult = Result<Value, EvalError>;
 
 #[derive(Clone)]
-pub struct Value(Arc<ValueLike + 'static>);
+pub struct Value {
+    inner: Arc<ValueLike + 'static>
+}
 
 impl Value {
+    /// Generate a new value with the given content
     pub fn new<T: ValueLike + 'static>(x: T) -> Value {
-        Value(Arc::new(x))
+        Value {
+            inner: Arc::new(x)
+        }
+    }
+
+    /// Perform macro expansion on the contained form
+    pub fn macroexpand(self) -> EvalResult {
+        match self.get_basic() {
+            Some(&BasicValue::List(ref xs)) => {
+                let m =
+                    xs.first()
+                      .and_then(|x| x.get_symbol())
+                      .and_then(|sym| ::environment::global().get(&*(sym.0)))
+                      .and_then(|val| match val.get_basic() {
+                          Some(&BasicValue::Macro(ref env, ref exec)) =>
+                              Some((env.clone(), exec.clone())),
+                          _ => None
+                      });
+
+                // check the first element to see if we can resolve it
+                if let Some((env, exec)) = m {
+                    let body: Result<Vec<_>, EvalError> =
+                        self.into_iter().skip(1)
+                            .map(|v| v.macroexpand())
+                            .collect();
+                    return exec.run(&env, body?.as_slice());
+                }
+            },
+            _ => {}
+        }
+        Ok(self)
     }
 }
 
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "<item: {}>", self.0.into_str())
+        write!(f, "<item: {}>", self.inner.into_str())
     }
 }
 
 impl ValueLike for Value {
-    fn get_basic(&self) -> Option<&BasicValue> { self.0.get_basic() }
-    fn get_symbol(&self) -> Option<Identifier> { self.0.get_symbol() }
-    fn get_string(&self) -> Option<String> { self.0.get_string() }
-    fn into_seq(&self) -> Vec<Value> { self.0.into_seq() }
-    fn into_iter(&self) -> ValueIteratorBox { self.0.into_iter() }
-    fn into_str(&self) -> String { self.0.into_str() }
-    fn into_args(&self) -> Vec<String> { self.0.into_args() }
-    fn is_executable(&self) -> bool { self.0.is_executable() }
+    fn get_basic(&self) -> Option<&BasicValue> { self.inner.get_basic() }
+    fn get_symbol(&self) -> Option<Identifier> { self.inner.get_symbol() }
+    fn get_string(&self) -> Option<String> { self.inner.get_string() }
+    fn into_seq(&self) -> Vec<Value> { self.inner.into_seq() }
+    fn into_iter(&self) -> ValueIteratorBox { self.inner.into_iter() }
+    fn into_str(&self) -> String { self.inner.into_str() }
+    fn into_args(&self) -> Vec<String> { self.inner.into_args() }
+    fn is_executable(&self) -> bool { self.inner.is_executable() }
     fn evaluate(&self, env: &Environment) -> EvalResult {
-        self.0.evaluate(env)
+        self.inner.evaluate(env)
     }
     fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
-        self.0.execute(env, args)
+        self.inner.execute(env, args)
     }
-    fn first(&self) -> Option<&ValueLike> { self.0.first() }
+    fn first(&self) -> Option<&ValueLike> { self.inner.first() }
 }
 
 #[derive(Debug, Clone)]
@@ -137,22 +171,22 @@ pub trait ValueLike : Send + Sync {
 impl BasicValue {
     /// Generate an empty value
     pub fn empty() -> Value {
-        Value(Arc::new(BasicValue::List(Vec::new())))
+        Value::new(BasicValue::List(Vec::new()))
     }
 
     /// Generate a new function
     pub fn function(env: Environment, body: Executable) -> Value {
-        Value(Arc::new(BasicValue::Function(env, body)))
+        Value::new(BasicValue::Function(env, body))
     }
 
     /// Build a new list value
     pub fn list<I: IntoIterator<Item=Value>>(i: I) -> Value {
-        Value(Arc::new(BasicValue::List(i.into_iter().collect())))
+        Value::new(BasicValue::List(i.into_iter().collect()))
     }
 
     /// Build a string value
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
-        Value(Arc::new(BasicValue::Str(s.borrow().to_owned())))
+        Value::new(BasicValue::Str(s.borrow().to_owned()))
     }
 }
 
@@ -214,20 +248,22 @@ impl ValueLike for BasicValue {
                 s
             },
             &BasicValue::Function(_,_)       => String::from("<function>"),
+            &BasicValue::Macro(_,_)          => String::from("<macro>"),
         }
     }
 
     fn into_args(&self) -> Vec<String> {
         match self {
-            &BasicValue::Boolean(true)       => vec![String::from("true")],
-            &BasicValue::Boolean(false)      => vec![String::from("false")],
-            &BasicValue::Number(ref n)       => vec![format!("{}", n)],
-            &BasicValue::Str(ref s)          => vec![s.to_owned()],
-            &BasicValue::Symbol(ref id)      => vec![(*(id.0)).to_owned()],
+            &BasicValue::Boolean(true)       => vec![self.into_str()],
+            &BasicValue::Boolean(false)      => vec![self.into_str()],
+            &BasicValue::Number(ref n)       => vec![self.into_str()],
+            &BasicValue::Str(ref s)          => vec![self.into_str()],
+            &BasicValue::Symbol(ref id)      => vec![self.into_str()],
             &BasicValue::List(ref l)         => l.into_iter()
                                            .flat_map(|x| x.into_args())
                                            .collect(),
-            &BasicValue::Function(_,_)       => vec![String::from("<function>")],
+            &BasicValue::Function(_,_)       => vec![self.into_str()],
+            &BasicValue::Macro(_,_)          => vec![self.into_str()],
         }
     }
 
@@ -253,6 +289,7 @@ impl ValueLike for BasicValue {
                       .and_then(|e| e.execute(env, args.as_slice()))
                 }
             },
+            &BasicValue::Macro(_,_) => panic!("illegal attempt to evaluate macro"),
             r => Ok(Value::new(r.to_owned()))
         }
     }
@@ -265,6 +302,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Symbol(_)        => false,
             &BasicValue::List(_)          => false,
             &BasicValue::Function(_,_)    => true,
+            &BasicValue::Macro(_,_)       => false,
         }
     }
 
@@ -277,6 +315,7 @@ impl ValueLike for BasicValue {
                     args.iter().map(|x| x.evaluate(env)).collect();
                 f.run(&e, vals?.as_slice())
             },
+            &BasicValue::Macro(_,_) => panic!("illegal attempt to execute macro"),
             _ => Err(EvalError::TypeError(String::from("not executable"))),
         }
     }
@@ -289,6 +328,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Symbol(_)        => Some(self),
             &BasicValue::List(ref v)      => v.first().map(|x| -> &ValueLike {&*x}),
             &BasicValue::Function(_,_)    => Some(self),
+            &BasicValue::Macro(_,_)       => Some(self),
         }
     }
 }
@@ -321,6 +361,7 @@ impl fmt::Debug for BasicValue {
             &BasicValue::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
             &BasicValue::List(ref v)   => write!(f, "{:?}", v),
             &BasicValue::Function(_,_) => write!(f, "<function>"),
+            &BasicValue::Macro(_,_)    => write!(f, "<macro>"),
         }
     }
 }
