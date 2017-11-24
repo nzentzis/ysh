@@ -1,6 +1,7 @@
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::boxed::Box;
+use std::cell::RefCell;
 
 use environment::Environment;
 use numeric::*;
@@ -36,7 +37,7 @@ pub enum BasicValue {
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
-pub type ValueIteratorBox = Box<Iterator<Item=Value>>;
+pub type ValueIteratorBox = Box<Iterator<Item=Value>+Send+Sync>;
 pub type EvalResult = Result<Value, EvalError>;
 
 #[derive(Clone)]
@@ -109,7 +110,11 @@ impl ValueLike for Value {
 pub enum EvalError {
     Unknown,
     InvalidOperation(&'static str),
-    TypeError(String)
+    TypeError(String),
+    Arity {
+        got: usize,
+        expected: usize
+    }
 }
 
 impl ::std::fmt::Display for EvalError {
@@ -121,6 +126,8 @@ impl ::std::fmt::Display for EvalError {
                 write!(f, "Invalid operation: {}", s),
             &EvalError::TypeError(ref s) =>
                 write!(f, "Type error: {}", s),
+            &EvalError::Arity {got, expected} =>
+                write!(f, "Got {} arguments, expected {}", got, expected),
         }
     }
 }
@@ -131,6 +138,7 @@ impl ::std::error::Error for EvalError {
             &EvalError::Unknown => &"unknown evaluation error",
             &EvalError::InvalidOperation(_) => &"invalid operation",
             &EvalError::TypeError(_) => &"type error",
+            &EvalError::Arity{..} => &"arity mismatch",
         }
     }
 }
@@ -158,7 +166,7 @@ pub trait ValueLike : Send + Sync {
     /// Convert into a sequential form
     /// 
     /// This must be equivalent to calling `self.into_iter().collect()`
-    fn into_seq(&self) -> Vec<Value>;
+    fn into_seq(&self) -> Vec<Value> { self.into_iter().collect() }
 
     /// Generate an iterator over the element's values
     /// 
@@ -170,7 +178,9 @@ pub trait ValueLike : Send + Sync {
     fn into_str(&self) -> String;
 
     /// Convert into a vector of strings usable as command-line arguments
-    fn into_args(&self) -> Vec<String>;
+    fn into_args(&self) -> Vec<String> {
+        self.into_iter().map(|x| x.into_str()).collect()
+    }
 
     /// Evaluate this value-like object in a given context
     fn evaluate(&self, env: &Environment) -> EvalResult;
@@ -211,17 +221,6 @@ impl BasicValue {
         Value::new(BasicValue::Str(s.borrow().to_owned()))
     }
 }
-
-/*
-// Values are strict, so just build an iterator directly. No need to be lazy
-// about it.
-impl<T: ValueLike> IntoIterator for T {
-    type Item = Value;
-    type IntoIter = ValueIteratorBox;
-
-    fn into_iter(self) -> ValueIteratorBox { self.into_iter() }
-}
-*/
 
 impl ValueLike for BasicValue {
     fn get_basic(&self) -> Option<&BasicValue> { Some(self) }
@@ -300,15 +299,20 @@ impl ValueLike for BasicValue {
                 }
             },
             &BasicValue::List(ref xs) => {
+                let evaluated: Result<Vec<_>, _> = xs.iter()
+                                                     .map(|x| x.evaluate(env))
+                                                     .collect();
+                let xs = evaluated?;
+
                 // evaluate () as ()
-                if xs.is_empty() {
-                    Ok(BasicValue::list(xs.to_owned()))
-                } else {
-                    let mut xs = xs.to_owned();
+                if xs[0].is_executable() {
+                    let mut xs = xs;
                     let args: Vec<_> = xs.split_off(1);
                     xs.pop().unwrap()
                       .evaluate(env)
                       .and_then(|e| e.execute(env, args.as_slice()))
+                } else {
+                    Ok(BasicValue::list(xs))
                 }
             },
             &BasicValue::Macro(_,_) => panic!("illegal attempt to evaluate macro"),
@@ -338,7 +342,7 @@ impl ValueLike for BasicValue {
                 f.run(&e, vals?.as_slice())
             },
             &BasicValue::Macro(_,_) => panic!("illegal attempt to execute macro"),
-            _ => Err(EvalError::TypeError(String::from("not executable"))),
+            x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
         }
     }
 
@@ -374,6 +378,84 @@ impl PartialEq for Value {
     }
 }
 
+struct LazySequenceIterator<I> where I: Iterator<Item=Value>+Send+Sync {
+    item_offset: usize, // offset into items of current element
+    items: Arc<Mutex<Vec<Value>>>,
+    rest: Arc<Mutex<I>>
+}
+
+impl<I: Iterator<Item=Value>+Send+Sync> Iterator for LazySequenceIterator<I> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        let mut items = self.items.lock().unwrap();
+        if self.item_offset < items.len() {
+            let r = items[self.item_offset].clone();
+            self.item_offset += 1;
+            return Some(r);
+        }
+
+        // no items left in vector - check iterator
+        let mut rest = self.rest.lock().unwrap();
+        match rest.next() {
+            None => None,
+            Some(itm) => {
+                // add to the item vec
+                items.push(itm.clone());
+                self.item_offset += 1;
+                return Some(itm)
+            }
+        }
+    }
+}
+
+/// Utility type for converting lazy iterators into sequence types
+/// 
+/// Note that this assumes the given iterator ends when `next` returns `None`.
+pub struct LazySequence<I> where I: Iterator<Item=Value>+Send+Sync {
+    // always lock `items` first if locking both
+    items: Arc<Mutex<Vec<Value>>>,
+    rest: Arc<Mutex<I>>
+}
+
+impl<I: Iterator<Item=Value>+Send+Sync> LazySequence<I> {
+    pub fn new(iter: I) -> Self {
+        LazySequence {
+            items: Arc::new(Mutex::new(Vec::new())),
+            rest: Arc::new(Mutex::new(iter))
+        }
+    }
+}
+
+impl<I: Iterator<Item=Value>+Send+Sync+'static> ValueLike for LazySequence<I> {
+    fn into_iter(&self) -> ValueIteratorBox {
+        Box::new(LazySequenceIterator {
+            item_offset: 0,
+            items: Arc::clone(&self.items),
+            rest: Arc::clone(&self.rest),
+        })
+    }
+
+    fn into_str(&self) -> String {
+        let mut s = String::new();
+        s.push('(');
+        let body: Vec<_> = self.into_iter().map(|x| x.into_str()).collect();
+        s.push_str(&body.join(" "));
+        s.push(')');
+
+        s
+    }
+
+    fn evaluate(&self, env: &Environment) -> EvalResult {
+        Ok(Value::new((*self).clone()))
+    }
+
+    fn first(&self) -> Option<&ValueLike> {
+        // TODO: try to find an efficient way to do this in the future
+        None
+    }
+}
+
 impl fmt::Debug for BasicValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
@@ -384,6 +466,15 @@ impl fmt::Debug for BasicValue {
             &BasicValue::List(ref v)   => write!(f, "{:?}", v),
             &BasicValue::Function(_,_) => write!(f, "<function>"),
             &BasicValue::Macro(_,_)    => write!(f, "<macro>"),
+        }
+    }
+}
+
+impl<I: Iterator<Item=Value>+Send+Sync> Clone for LazySequence<I> {
+    fn clone(&self) -> Self {
+        LazySequence {
+            items: Arc::clone(&self.items),
+            rest: Arc::clone(&self.rest),
         }
     }
 }
