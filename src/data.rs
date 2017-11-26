@@ -84,7 +84,11 @@ impl Value {
 
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "<item: {}>", self.inner.into_str())
+        if let Some(b) = self.get_basic() {
+            write!(f, "{:?}", b)
+        } else {
+            write!(f, "<item: {}>", self.inner.into_str())
+        }
     }
 }
 
@@ -95,6 +99,8 @@ impl ValueLike for Value {
     fn into_seq(&self) -> Vec<Value> { self.inner.into_seq() }
     fn into_iter(&self) -> ValueIteratorBox { self.inner.into_iter() }
     fn into_str(&self) -> String { self.inner.into_str() }
+    fn into_num(&self) -> Option<Number> { self.inner.into_num() }
+    fn into_bool(&self) -> bool { self.inner.into_bool() }
     fn into_args(&self) -> Vec<String> { self.inner.into_args() }
     fn is_executable(&self) -> bool { self.inner.is_executable() }
     fn evaluate(&self, env: &Environment) -> EvalResult {
@@ -176,6 +182,12 @@ pub trait ValueLike : Send + Sync {
 
     /// Convert a value into string form
     fn into_str(&self) -> String;
+
+    /// Convert a value into numeric form
+    fn into_num(&self) -> Option<Number> { None }
+
+    /// Check whether a value is truth-like
+    fn into_bool(&self) -> bool { true }
 
     /// Convert into a vector of strings usable as command-line arguments
     fn into_args(&self) -> Vec<String> {
@@ -270,6 +282,27 @@ impl ValueLike for BasicValue {
             },
             &BasicValue::Function(_,_)       => String::from("<function>"),
             &BasicValue::Macro(_,_)          => String::from("<macro>"),
+        }
+    }
+
+    fn into_num(&self) -> Option<Number> {
+        if let &BasicValue::Number(ref n) = self {
+            Some(n.to_owned())
+        } else {
+            None
+        }
+    }
+
+    fn into_bool(&self) -> bool {
+        match self {
+            &BasicValue::Boolean(b)          => b,
+            &BasicValue::Number(ref n)       => true, // TODO: 0 -> false
+            &BasicValue::Str(ref s)          => !s.is_empty(),
+            &BasicValue::Symbol(ref id)      => true,
+            &BasicValue::List(ref l)         => if l.is_empty() { false }
+                                                else { l.iter().any(|x| x.into_bool()) },
+            &BasicValue::Function(_,_)       => true,
+            &BasicValue::Macro(_,_)          => true,
         }
     }
 

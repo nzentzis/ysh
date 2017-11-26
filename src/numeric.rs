@@ -69,6 +69,16 @@ impl Number {
             (Number::Complex{a,b}, _) => Number::Complex{a,b}
         }
     }
+
+    /// Round to the nearest integer, sacrificing precision if needed
+    pub fn round(&self) -> i64 {
+        match self {
+            &Number::Integer(i)     => i,
+            &Number::Rational{num,denom} => num/denom,
+            &Number::Real(f)        => f.round() as i64,
+            &Number::Complex{a, b}  => a.round() as i64
+        }
+    }
 }
 
 impl fmt::Debug for Number {

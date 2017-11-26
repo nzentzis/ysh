@@ -1,4 +1,5 @@
 use environment::*;
+use numeric::*;
 use data::*;
 
 struct MapIterator {
@@ -104,9 +105,53 @@ fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+/// Take a specific element of the input sequence(s)
+/// 
+///     (nth i)     -> return a function f such that (f ...) = (nth i ...)
+///     (nth i xs)  -> take the i-th element of xs
+///     (nth i xs ys...) -> get a list of i-th elements, excluding those for
+///                         which no element is available.
+/// 
+/// If the given element isn't there, return ()
+fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 { // build transformer
+        let idx = if let Some(i) = args[0].into_num().map(|x| x.round()) { i }
+                  else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
+        Ok(BasicValue::function(env.to_owned(),
+            Executable::native(move |env, args| {
+                let res: Vec<_> = args.iter().filter_map(|v| v.into_iter()
+                                                              .nth(idx as usize))
+                                      .collect();
+                if res.len() == 1 {
+                    Ok(res.into_iter().next().unwrap())
+                } else {
+                    Ok(BasicValue::list(res))
+                }
+            })
+        ))
+    } else if args.len() > 1 {
+        let idx = if let Some(i) = args[0].into_num().map(|x| x.round()) { i }
+                  else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
+        let res: Vec<_> = args[1..].iter().filter_map(|v| v.into_iter()
+                                                      .nth(idx as usize))
+                                   .collect();
+        if res.len() == 1 {
+            Ok(res.into_iter().next().unwrap())
+        } else {
+            Ok(BasicValue::list(res))
+        }
+    } else {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 1
+        })
+    }
+}
+
 pub fn initialize() {
     let env = global();
     env.set("map", BasicValue::function(empty(), Executable::native(fn_map)));
     env.set("first", BasicValue::function(empty(), Executable::native(fn_first)));
     env.set("rest", BasicValue::function(empty(), Executable::native(fn_rest)));
+    env.set("nth", BasicValue::function(empty(), Executable::native(fn_nth)));
 }
