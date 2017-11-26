@@ -338,7 +338,7 @@ impl ValueLike for BasicValue {
                 let xs = evaluated?;
 
                 // evaluate () as ()
-                if xs[0].is_executable() {
+                if !xs.is_empty() && xs[0].is_executable() {
                     let mut xs = xs;
                     let args: Vec<_> = xs.split_off(1);
                     xs.pop().unwrap()

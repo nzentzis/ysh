@@ -437,7 +437,9 @@ impl TransformEvaluation {
     ///     c. Return the result
     /// 2. Evaluate the transform. If the result is executable, perform steps
     ///    a, b, and c on the result.
-    /// 3. Use the transform value and ignore the input
+    /// 3. If the evaluation succeeded, use the evaluation result and ignore the
+    ///    input
+    /// 4. If the evaluation failed, use the original value
     fn apply_value_xform(xform: Value, inner: Value) -> Value {
         use std::ops::Deref;
         if xform.is_executable() {
@@ -464,10 +466,10 @@ impl TransformEvaluation {
                     return BasicValue::list(vec![m.clone(), inner]);
                 }
             }
+            m
+        } else {
+            xform
         }
-
-        // make sure to return the *original* rather than the evaluated version
-        xform
     }
 
     fn launch<I>(input: RawFd, elements: I, output: EvalOutput)

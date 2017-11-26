@@ -95,7 +95,7 @@ fn init_environment() {
         Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
-                    println!("({})", i.into_str());
+                    println!("{}", i.into_str());
                 }
             }
             Ok(BasicValue::empty())
