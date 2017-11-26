@@ -74,8 +74,6 @@ fn fn_map(env: &Environment, args: &[Value]) -> EvalResult {
 /// 
 /// If the input is empty, returns ()
 fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
-    // adjust behavior depending on args
-    // on 1 arg: take first element of arg
     if args.len() == 1 {
         let itm = &args[0];
         match itm.into_iter().next() {
@@ -90,8 +88,25 @@ fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+/// Remove the first element of an input sequence
+/// 
+/// If the input is empty, returns ()
+fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 {
+        let itm = &args[0];
+        let res: Vec<_> = itm.into_iter().skip(1).collect();
+        Ok(BasicValue::list(res))
+    } else {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 1
+        })
+    }
+}
+
 pub fn initialize() {
     let env = global();
     env.set("map", BasicValue::function(empty(), Executable::native(fn_map)));
     env.set("first", BasicValue::function(empty(), Executable::native(fn_first)));
+    env.set("rest", BasicValue::function(empty(), Executable::native(fn_rest)));
 }
