@@ -1,5 +1,6 @@
 use std::fmt;
 use std::ops;
+use std::borrow::Borrow;
 
 #[derive(Clone, PartialEq)]
 /// A general numeric type
@@ -40,33 +41,33 @@ impl Number {
     /// 
     /// If this is a higher type than the other, then return it unmodified.
     /// Warning: this may reduce a precise value to an approximate one.
-    fn cast_to_match(self, other: &Self) -> Self {
+    fn cast_to_match(&self, other: &Self) -> Self {
         match (self, other) {
-            (Number::Integer(n), &Number::Integer(_)) =>
+            (&Number::Integer(n), &Number::Integer(_)) =>
                 Number::Integer(n),
-            (Number::Integer(n), &Number::Rational{..}) =>
+            (&Number::Integer(n), &Number::Rational{..}) =>
                 Number::rational(n,1),
-            (Number::Integer(n), &Number::Real(_)) =>
+            (&Number::Integer(n), &Number::Real(_)) =>
                 Number::real(n as f64),
-            (Number::Integer(n), &Number::Complex{..}) =>
+            (&Number::Integer(n), &Number::Complex{..}) =>
                 Number::complex(n as f64, 0.),
-            (Number::Rational{num, denom}, &Number::Integer(_)) =>
+            (&Number::Rational{num, denom}, &Number::Integer(_)) =>
                 Number::rational(num, denom),
-            (Number::Rational{num, denom}, &Number::Rational{..}) =>
+            (&Number::Rational{num, denom}, &Number::Rational{..}) =>
                 Number::rational(num, denom),
-            (Number::Rational{num, denom}, &Number::Real(_)) =>
+            (&Number::Rational{num, denom}, &Number::Real(_)) =>
                 Number::real(num as f64 / denom as f64),
-            (Number::Rational{num, denom}, &Number::Complex{..}) =>
+            (&Number::Rational{num, denom}, &Number::Complex{..}) =>
                 Number::complex(num as f64 / denom as f64, 0.),
-            (Number::Real(n), &Number::Integer(_)) =>
+            (&Number::Real(n), &Number::Integer(_)) =>
                 Number::real(n),
-            (Number::Real(n), &Number::Rational{..}) =>
+            (&Number::Real(n), &Number::Rational{..}) =>
                 Number::real(n),
-            (Number::Real(n), &Number::Real(_)) =>
+            (&Number::Real(n), &Number::Real(_)) =>
                 Number::real(n),
-            (Number::Real(n), &Number::Complex{..}) =>
+            (&Number::Real(n), &Number::Complex{..}) =>
                 Number::complex(n, 0.),
-            (Number::Complex{a,b}, _) => Number::Complex{a,b}
+            (&Number::Complex{a,b}, _) => Number::Complex{a,b}
         }
     }
 
@@ -103,24 +104,152 @@ impl fmt::Display for Number {
     }
 }
 
-impl ops::Add for Number {
+/// Compute the GCD of two integers using the Euclidean algorithm
+fn gcd(a: i64, b: i64) -> i64 {
+    let (mut k1, mut k2) = if a < b { (b, a) } else { (a, b) };
+
+    loop {
+        let q = k2 / k1;
+        let r = k2 % k1;
+
+        if r == 0 { break k1 }
+
+        k2 = k1;
+        k1 = r;
+    }
+}
+
+/// Compute the LCM of two integers
+fn lcm(a: i64, b: i64) -> i64 {
+    let m = (a * b).abs();
+    m / gcd(a,b)
+}
+
+impl<A> ops::Add<A> for Number where A: Borrow<Number> {
     type Output = Number;
 
-    fn add(self, mut rhs: Number) -> Number {
-        let mut a = self.cast_to_match(&rhs);
-        rhs = rhs.cast_to_match(&a);
+    fn add(self, rhs: A) -> Number {
+        let rhs = rhs.borrow();
+        let mut a = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&a);
 
         match (a,rhs) {
             (Number::Integer(a), Number::Integer(b)) =>
                 Number::Integer(a+b),
             (Number::Rational{num,denom}, Number::Rational{num:a,denom:b}) => {
-                unimplemented!()
+                let d = lcm(denom, b);
+                let n_x = (d/denom)*num;
+                let n_y = (d/b)*a;
+                let n = n_x + n_y;
+                Number::Rational {
+                    num: n,
+                    denom: d
+                }
             },
             (Number::Real(a), Number::Real(b)) =>
                 Number::Real(a+b),
             (Number::Complex{a,b}, Number::Complex{a:x,b:y}) =>
                 Number::Complex {a: a+x, b: b+y},
             _ => panic!("failed to cast numeric values")
+        }
+    }
+}
+
+impl<A> ops::AddAssign<A> for Number where A: Borrow<Number> {
+    fn add_assign(&mut self, rhs: A) {
+        let rhs = rhs.borrow();
+        *self = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&self);
+
+        match (self,rhs) {
+            (&mut Number::Integer(ref mut a), Number::Integer(b)) => { *a += b },
+            (&mut Number::Rational{ref mut num,ref mut denom},
+             Number::Rational{num:a,denom:b}) => {
+                let d = lcm(*denom, b);
+                let n_x = (d / *denom) * (*num);
+                let n_y = (d/b)*a;
+                let n = n_x + n_y;
+
+                *num = n;
+                *denom = d;
+            },
+            (&mut Number::Real(ref mut a), Number::Real(b)) => { *a += b; },
+            (&mut Number::Complex{ref mut a,ref mut b}, Number::Complex{a:x,b:y}) => {
+                *a += x;
+                *b += y;
+            },
+            _ => panic!("failed to cast numeric values")
+        }
+    }
+}
+
+impl<A> ops::Sub<A> for Number where A: Borrow<Number> {
+    type Output = Number;
+
+    fn sub(self, rhs: A) -> Number {
+        let rhs = rhs.borrow();
+        let mut a = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&a);
+
+        match (a,rhs) {
+            (Number::Integer(a), Number::Integer(b)) =>
+                Number::Integer(a-b),
+            (Number::Rational{num,denom}, Number::Rational{num:a,denom:b}) => {
+                let d = lcm(denom, b);
+                let n_x = (d/denom)*num;
+                let n_y = (d/b)*a;
+                let n = n_x - n_y;
+                Number::Rational {
+                    num: n,
+                    denom: d
+                }
+            },
+            (Number::Real(a), Number::Real(b)) =>
+                Number::Real(a-b),
+            (Number::Complex{a,b}, Number::Complex{a:x,b:y}) =>
+                Number::Complex {a: a-x, b: b-y},
+            _ => panic!("failed to cast numeric values")
+        }
+    }
+}
+
+impl<A> ops::SubAssign<A> for Number where A: Borrow<Number> {
+    fn sub_assign(&mut self, rhs: A) {
+        let rhs = rhs.borrow();
+        *self = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&self);
+
+        match (self,rhs) {
+            (&mut Number::Integer(ref mut a), Number::Integer(b)) => { *a -= b },
+            (&mut Number::Rational{ref mut num,ref mut denom},
+             Number::Rational{num:a,denom:b}) => {
+                let d = lcm(*denom, b);
+                let n_x = (d / *denom) * (*num);
+                let n_y = (d/b)*a;
+                let n = n_x - n_y;
+
+                *num = n;
+                *denom = d;
+            },
+            (&mut Number::Real(ref mut a), Number::Real(b)) => { *a -= b; },
+            (&mut Number::Complex{ref mut a,ref mut b}, Number::Complex{a:x,b:y}) => {
+                *a -= x;
+                *b -= y;
+            },
+            _ => panic!("failed to cast numeric values")
+        }
+    }
+}
+
+impl ops::Neg for Number {
+    type Output = Number;
+
+    fn neg(self) -> Number {
+        match self {
+            Number::Integer(x) => Number::Integer(-x),
+            Number::Rational{num,denom} => Number::Rational{num:-num,denom},
+            Number::Real(x) => Number::Real(-x),
+            Number::Complex{a,b} => Number::Complex{a:-a,b:-b}
         }
     }
 }

@@ -15,13 +15,43 @@ fn fn_add(env: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::new(BasicValue::Number(ns.into_iter().fold(Number::int(0), |a,b| a+b))))
 }
 
+/// If used with one arg, negate it
+/// If more than one, subtract the second and on from the first
+fn fn_sub(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.is_empty() {
+        Err(EvalError::Arity {
+            got: 0,
+            expected: 1
+        })
+    } else if args.len() == 1 {
+        let n = if let Some(n) = args[0].into_num() { n }
+                else { return Err(EvalError::TypeError(String::from("cannot negate non-numeric type"))) };
+        Ok(Value::new(BasicValue::Number(-n)))
+    } else {
+        let mut n =
+            if let Some(n) = args[0].into_num() { n }
+            else { return Err(EvalError::TypeError(
+                        String::from("cannot subtract from non-numeric type"))) };
+
+        for i in args[1..].iter() {
+            if let Some(x) = i.into_num() {
+                n -= x;
+            } else {
+                return Err(EvalError::TypeError(String::from("cannot subtract non-numeric type")))
+            }
+        }
+
+        Ok(Value::new(BasicValue::Number(n)))
+    }
+}
+
 fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut rs = Vec::new();
     let one = Number::int(1);
     for i in args.iter() {
         match i.into_num() {
-            Some(n) => rs.push(n + one.clone()),
+            Some(n) => rs.push(n + &one),
             r => return Err(EvalError::TypeError(String::from("non-numeric adds not yet implemented")))
         }
     }
@@ -37,6 +67,7 @@ fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
 pub fn initialize() {
     let env = global();
     env.set("+", BasicValue::function(empty(), Executable::native(fn_add)));
+    env.set("-", BasicValue::function(empty(), Executable::native(fn_sub)));
 
     env.set("inc", BasicValue::function(empty(), Executable::native(fn_inc)));
 }
