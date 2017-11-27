@@ -8,8 +8,18 @@ use numeric::*;
 
 #[derive(Clone)]
 pub enum Executable {
+    /// Native function which acts like an interpreted one
+    /// 
+    /// Arguments will be evaluated *prior* to running the function
     Native(Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
+
     //Interpreted()
+
+    /// Native implementation of a core form
+    /// 
+    /// Similar to the `Native` type, but arguments are not evaluated prior to
+    /// running it.
+    CoreFn(Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
 }
 
 impl Executable {
@@ -20,7 +30,14 @@ impl Executable {
 
     pub fn run(&self, env: &Environment, args: &[Value]) -> EvalResult {
         match self {
-            &Executable::Native(ref f) => f(env, args)
+            &Executable::Native(ref f) => {
+                let vals: Result<Vec<_>, EvalError> =
+                    args.iter().map(|x| x.evaluate(env)).collect();
+                f(env, vals?.as_slice())
+            },
+            &Executable::CoreFn(ref f) => {
+                f(env, args)
+            }
         }
     }
 }
@@ -332,20 +349,14 @@ impl ValueLike for BasicValue {
                 }
             },
             &BasicValue::List(ref xs) => {
-                let evaluated: Result<Vec<_>, _> = xs.iter()
-                                                     .map(|x| x.evaluate(env))
-                                                     .collect();
-                let xs = evaluated?;
-
                 // evaluate () as ()
-                if !xs.is_empty() && xs[0].is_executable() {
-                    let mut xs = xs;
-                    let args: Vec<_> = xs.split_off(1);
-                    xs.pop().unwrap()
-                      .evaluate(env)
-                      .and_then(|e| e.execute(env, args.as_slice()))
+                if xs.is_empty() { return Ok(BasicValue::list(vec![])); }
+                let first = xs[0].evaluate(env)?;
+
+                if first.is_executable() {
+                    first.execute(env, &xs[1..])
                 } else {
-                    Ok(BasicValue::list(xs))
+                    Ok(BasicValue::list(xs.to_owned()))
                 }
             },
             &BasicValue::Macro(_,_) => panic!("illegal attempt to evaluate macro"),
@@ -369,10 +380,8 @@ impl ValueLike for BasicValue {
         match self {
             // TODO: force evaluate args in outer environment
             &BasicValue::Function(ref e,ref f) => {
-                // for functions, evaluate all args. macros won't do this.
-                let vals: Result<Vec<_>, EvalError> =
-                    args.iter().map(|x| x.evaluate(env)).collect();
-                f.run(&e, vals?.as_slice())
+                // delegate to inner evaluation function
+                f.run(&e, args)
             },
             &BasicValue::Macro(_,_) => panic!("illegal attempt to execute macro"),
             x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
