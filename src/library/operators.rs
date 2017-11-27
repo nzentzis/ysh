@@ -66,8 +66,8 @@ fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
 
 pub fn initialize() {
     let env = global();
-    env.set("+", BasicValue::function(empty(), Executable::native(fn_add)));
-    env.set("-", BasicValue::function(empty(), Executable::native(fn_sub)));
+    env.set("+", BasicValue::function(Executable::native(fn_add)));
+    env.set("-", BasicValue::function(Executable::native(fn_sub)));
 
-    env.set("inc", BasicValue::function(empty(), Executable::native(fn_inc)));
+    env.set("inc", BasicValue::function(Executable::native(fn_inc)));
 }

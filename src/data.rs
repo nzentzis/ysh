@@ -10,15 +10,20 @@ use numeric::*;
 pub enum Executable {
     /// Native function which acts like an interpreted one
     /// 
-    /// Arguments will be evaluated *prior* to running the function
+    /// Arguments will be evaluated *prior* to running the function. The
+    /// function accepts a reference to the lexical environment at call time.
     Native(Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
 
-    //Interpreted()
+    /// Interpreted function
+    /// 
+    /// The inner function accepts a reference to the stored environment
+    Interpreted(Environment, Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
 
     /// Native implementation of a core form
     /// 
     /// Similar to the `Native` type, but arguments are not evaluated prior to
-    /// running it.
+    /// running it. The function accepts a reference to the lexical environment
+    /// at call time.
     CoreFn(Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
 }
 
@@ -28,16 +33,15 @@ impl Executable {
         Executable::Native(Arc::new(f))
     }
 
-    pub fn run(&self, env: &Environment, args: &[Value]) -> EvalResult {
+    pub fn run(&self, lexical: &Environment, args: &[Value]) -> EvalResult {
         match self {
             &Executable::Native(ref f) => {
                 let vals: Result<Vec<_>, EvalError> =
-                    args.iter().map(|x| x.evaluate(env)).collect();
-                f(env, vals?.as_slice())
+                    args.iter().map(|x| x.evaluate(lexical)).collect();
+                f(lexical, vals?.as_slice())
             },
-            &Executable::CoreFn(ref f) => {
-                f(env, args)
-            }
+            &Executable::CoreFn(ref f) => f(lexical, args),
+            &Executable::Interpreted(ref env, ref f) => f(env, args)
         }
     }
 }
@@ -49,7 +53,7 @@ pub enum BasicValue {
     Str(String),
     Symbol(Identifier),
     List(Vec<Value>),
-    Function(Environment, Executable),
+    Function(Executable),
     Macro(Environment, Executable),
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
@@ -211,7 +215,7 @@ pub trait ValueLike : Send + Sync {
         self.into_iter().map(|x| x.into_str()).collect()
     }
 
-    /// Evaluate this value-like object in a given context
+    /// Evaluate this value-like object in a given lexical environment
     fn evaluate(&self, env: &Environment) -> EvalResult;
 
     /// Whether the value can be executed with arguments
@@ -236,8 +240,8 @@ impl BasicValue {
     }
 
     /// Generate a new function
-    pub fn function(env: Environment, body: Executable) -> Value {
-        Value::new(BasicValue::Function(env, body))
+    pub fn function(body: Executable) -> Value {
+        Value::new(BasicValue::Function(body))
     }
 
     /// Build a new list value
@@ -297,7 +301,7 @@ impl ValueLike for BasicValue {
                 s.push(')');
                 s
             },
-            &BasicValue::Function(_,_)       => String::from("<function>"),
+            &BasicValue::Function(_)         => String::from("<function>"),
             &BasicValue::Macro(_,_)          => String::from("<macro>"),
         }
     }
@@ -318,7 +322,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Symbol(ref id)      => true,
             &BasicValue::List(ref l)         => if l.is_empty() { false }
                                                 else { l.iter().any(|x| x.into_bool()) },
-            &BasicValue::Function(_,_)       => true,
+            &BasicValue::Function(_)         => true,
             &BasicValue::Macro(_,_)          => true,
         }
     }
@@ -333,7 +337,7 @@ impl ValueLike for BasicValue {
             &BasicValue::List(ref l)         => l.into_iter()
                                            .flat_map(|x| x.into_args())
                                            .collect(),
-            &BasicValue::Function(_,_)       => vec![self.into_str()],
+            &BasicValue::Function(_)         => vec![self.into_str()],
             &BasicValue::Macro(_,_)          => vec![self.into_str()],
         }
     }
@@ -371,7 +375,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Str(_)           => false,
             &BasicValue::Symbol(_)        => false,
             &BasicValue::List(_)          => false,
-            &BasicValue::Function(_,_)    => true,
+            &BasicValue::Function(_)      => true,
             &BasicValue::Macro(_,_)       => false,
         }
     }
@@ -379,10 +383,8 @@ impl ValueLike for BasicValue {
     fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
         match self {
             // TODO: force evaluate args in outer environment
-            &BasicValue::Function(ref e,ref f) => {
-                // delegate to inner evaluation function
-                f.run(&e, args)
-            },
+            // delegate to inner evaluation function
+            &BasicValue::Function(ref f) => f.run(env, args),
             &BasicValue::Macro(_,_) => panic!("illegal attempt to execute macro"),
             x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
         }
@@ -395,7 +397,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Str(_)           => Some(self),
             &BasicValue::Symbol(_)        => Some(self),
             &BasicValue::List(ref v)      => v.first().map(|x| -> &ValueLike {&*x}),
-            &BasicValue::Function(_,_)    => Some(self),
+            &BasicValue::Function(_)      => Some(self),
             &BasicValue::Macro(_,_)       => Some(self),
         }
     }
@@ -413,7 +415,7 @@ impl PartialEq for Value {
             (&Value::List(ref x),    &Value::List(ref y))   => x == y,
 
             // don't bother comparing functions or wrappers yet
-            (&Value::Function(_,_),&Value::Function(_,_))   => false,
+            (&Value::Function(_)  ,&Value::Function(_,_))   => false,
             _                                               => false
         }
         */
@@ -506,7 +508,7 @@ impl fmt::Debug for BasicValue {
             &BasicValue::Str(ref s)    => write!(f, "<str:\"{}\">", s),
             &BasicValue::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
             &BasicValue::List(ref v)   => write!(f, "{:?}", v),
-            &BasicValue::Function(_,_) => write!(f, "<function>"),
+            &BasicValue::Function(_)   => write!(f, "<function>"),
             &BasicValue::Macro(_,_)    => write!(f, "<macro>"),
         }
     }
@@ -538,6 +540,12 @@ impl Identifier {
 
     pub fn from(s: String) -> Self {
         Identifier(Arc::new(s))
+    }
+}
+
+impl AsRef<str> for Identifier {
+    fn as_ref(&self) -> &str {
+        &(*self.0)
     }
 }
 

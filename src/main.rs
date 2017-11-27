@@ -56,8 +56,7 @@ fn locate_executable(env: &Environment, args: &[Value]) -> EvalResult {
 
     if args.len() == 0 {
         // allow use as a transformer
-        return Ok(BasicValue::function(
-                empty(), Executable::native(locate_executable)));
+        return Ok(BasicValue::function(Executable::native(locate_executable)));
     }
 
     let paths = if let Some(p) = env.get("path") { p }
@@ -84,15 +83,13 @@ fn init_environment() {
     library::initialize();
 
     let env = global();
-    env.set("print", BasicValue::function(empty(),
-        Executable::native(|_, args| {
+    env.set("print", BasicValue::function(Executable::native(|_, args| {
             //println!("{:?}", args);
             println!("value!");
             Ok(BasicValue::empty())
         })));
 
-    env.set("print-lines", BasicValue::function(empty(),
-        Executable::native(|_, args| {
+    env.set("print-lines", BasicValue::function(Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
                     println!("{}", i.into_str());
@@ -101,18 +98,16 @@ fn init_environment() {
             Ok(BasicValue::empty())
         })));
 
-    env.set("shell/locate", BasicValue::function(empty(),
+    env.set("shell/locate", BasicValue::function(
         Executable::native(locate_executable)));
 
-    env.set("exit", BasicValue::function(empty(),
-        Executable::native(|_,_| {
+    env.set("exit", BasicValue::function(Executable::native(|_,_| {
             RUN_SHELL.store(false, Ordering::Relaxed);
             Ok(BasicValue::empty()) })));
 
     // recovery function to restore the system environment in case something got
     // seriously borked
-    env.set_immut("sys/recover", BasicValue::function(empty(),
-        Executable::native(|_,_| {
+    env.set_immut("sys/recover", BasicValue::function(Executable::native(|_,_| {
             init_environment();
             Ok(BasicValue::empty()) })));
 
