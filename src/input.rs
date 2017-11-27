@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io;
 
+use nom::*;
+
 use termion::*;
 use termion::raw::IntoRawMode;
 use termion::input::TermRead;
@@ -85,9 +87,27 @@ impl<'a> ActiveEditor<'a> {
             }
 
             if let Some(r) = self.editor.done() {
-                write!(self.output, "\n")?;
+                write!(self.output, "\r\n")?;
                 self.output.flush()?;
-                return Ok(pipeline(r.as_bytes()).to_result().unwrap());
+
+                // if the line's blank, just reset
+                if r.as_bytes().iter().all(|x| *x == b' ') {
+                    self.redraw_prompt()?;
+                } else {
+                    // need to add \r here since we're still in raw mode
+                    match pipeline(r.as_bytes()) {
+                        IResult::Done(_, r) => { return Ok(r); },
+                        IResult::Error(e) => {
+                            println!("ysh: syntax error: {}\r", e.description());
+                        },
+                        IResult::Incomplete(n) => {
+                            println!("ysh: multiline splits not implemented\r");
+                        }
+                    }
+                    self.output.flush()?;
+                }
+
+                self.editor = LineEditor::new(Box::new(basic::Editor::new()));
             }
 
             self.redraw_prompt()?;

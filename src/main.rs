@@ -206,7 +206,7 @@ fn main() {
                 continue;
             }
         };
-        println!("\r{:?}", plan);
+        //println!("\r{:?}", plan);
 
         if let Some(x) = plan.launch(false) {
             x.wait();
