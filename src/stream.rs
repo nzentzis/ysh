@@ -6,7 +6,7 @@ use std::boxed::Box;
 
 use span::*;
 use data::*;
-
+use numeric::*;
 
 #[derive(Clone, Copy, Debug)]
 /// Options structure to use when generating a new polymorphic stream structure.
@@ -455,6 +455,20 @@ impl ValueLike for PolyField {
     fn into_str(&self) -> String {
         let x = self.data.copy(..);
         String::from_utf8_lossy(x.as_slice()).into_owned()
+    }
+
+    fn into_num(&self) -> Option<Number> {
+        use parse::numeric_value;
+
+        // try parsing as a number
+        let data = self.data.copy(..);
+        let n = numeric_value(data.as_slice());
+
+        if let Ok(n) = n.to_result() {
+            n.into_num()
+        } else {
+            None
+        }
     }
 
     fn first(&self) -> Option<&ValueLike> {

@@ -111,7 +111,7 @@ named!(real<f64>,
 // TODO: replace subparser calls with something else, since they don't handle
 // signs properly (e.g. -2 + +3 i -> -2+3i or -3/-2 -> 3/2)
 /// Parse a numeric value
-named!(numeric_value<Value>,
+named!(pub numeric_value<Value>,
        map!(alt_complete!(
                ws!(do_parse!(n:integer >> tag!("/") >> m:integer >>
                          (Number::rational(n,m)))) |
