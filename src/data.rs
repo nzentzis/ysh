@@ -54,7 +54,7 @@ pub enum BasicValue {
     Symbol(Identifier),
     List(Vec<Value>),
     Function(Executable),
-    Macro(Environment, Executable),
+    Macro(Executable),
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
@@ -83,18 +83,18 @@ impl Value {
                       .and_then(|x| x.get_symbol())
                       .and_then(|sym| ::environment::global().get(&*(sym.0)))
                       .and_then(|val| match val.get_basic() {
-                          Some(&BasicValue::Macro(ref env, ref exec)) =>
-                              Some((env.clone(), exec.clone())),
+                          Some(&BasicValue::Macro(ref exec)) =>
+                              Some(exec.clone()),
                           _ => None
                       });
 
                 // check the first element to see if we can resolve it
-                if let Some((env, exec)) = m {
+                if let Some(exec) = m {
                     let body: Result<Vec<_>, EvalError> =
                         self.into_iter().skip(1)
                             .map(|v| v.macroexpand())
                             .collect();
-                    return exec.run(&env, body?.as_slice());
+                    return exec.run(&::environment::empty(), body?.as_slice());
                 }
             },
             _ => {}
@@ -302,7 +302,7 @@ impl ValueLike for BasicValue {
                 s
             },
             &BasicValue::Function(_)         => String::from("<function>"),
-            &BasicValue::Macro(_,_)          => String::from("<macro>"),
+            &BasicValue::Macro(_)            => String::from("<macro>"),
         }
     }
 
@@ -323,7 +323,7 @@ impl ValueLike for BasicValue {
             &BasicValue::List(ref l)         => if l.is_empty() { false }
                                                 else { l.iter().any(|x| x.into_bool()) },
             &BasicValue::Function(_)         => true,
-            &BasicValue::Macro(_,_)          => true,
+            &BasicValue::Macro(_)            => true,
         }
     }
 
@@ -338,7 +338,7 @@ impl ValueLike for BasicValue {
                                            .flat_map(|x| x.into_args())
                                            .collect(),
             &BasicValue::Function(_)         => vec![self.into_str()],
-            &BasicValue::Macro(_,_)          => vec![self.into_str()],
+            &BasicValue::Macro(_)            => vec![self.into_str()],
         }
     }
 
@@ -367,7 +367,7 @@ impl ValueLike for BasicValue {
                     Ok(BasicValue::list(xs))
                 }
             },
-            &BasicValue::Macro(_,_) => panic!("illegal attempt to evaluate macro"),
+            &BasicValue::Macro(_)   => panic!("illegal attempt to evaluate macro"),
             r => Ok(Value::new(r.to_owned()))
         }
     }
@@ -380,7 +380,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Symbol(_)        => false,
             &BasicValue::List(_)          => false,
             &BasicValue::Function(_)      => true,
-            &BasicValue::Macro(_,_)       => false,
+            &BasicValue::Macro(_)         => false,
         }
     }
 
@@ -389,7 +389,7 @@ impl ValueLike for BasicValue {
             // TODO: force evaluate args in outer environment
             // delegate to inner evaluation function
             &BasicValue::Function(ref f) => f.run(env, args),
-            &BasicValue::Macro(_,_) => panic!("illegal attempt to execute macro"),
+            &BasicValue::Macro(_)   => panic!("illegal attempt to execute macro"),
             x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
         }
     }
@@ -402,7 +402,7 @@ impl ValueLike for BasicValue {
             &BasicValue::Symbol(_)        => Some(self),
             &BasicValue::List(ref v)      => v.first().map(|x| -> &ValueLike {&*x}),
             &BasicValue::Function(_)      => Some(self),
-            &BasicValue::Macro(_,_)       => Some(self),
+            &BasicValue::Macro(_)         => Some(self),
         }
     }
 }
@@ -513,7 +513,7 @@ impl fmt::Debug for BasicValue {
             &BasicValue::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
             &BasicValue::List(ref v)   => write!(f, "{:?}", v),
             &BasicValue::Function(_)   => write!(f, "<function>"),
-            &BasicValue::Macro(_,_)    => write!(f, "<macro>"),
+            &BasicValue::Macro(_)      => write!(f, "<macro>"),
         }
     }
 }
