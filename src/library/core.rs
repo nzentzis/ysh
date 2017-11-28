@@ -277,15 +277,33 @@ fn core_quote(lex: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+/// Utility function combining `def` and `fn`
+/// 
+/// The first argument is interpreted as in `def`, and the remainder are
+/// interpreted as arguments to `fn`.
+fn core_defn(lex: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() < 1 {
+        return Err(EvalError::Arity { got: 0, expected: 3 });
+    }
+
+    let v = core_fn(lex, &args[1..])?;
+    let name = args[0].clone();
+    core_def(lex, &[name, v])
+}
+
 pub fn initialize() {
     let env = global();
 
+    // special forms
     env.set_immut("fn", BasicValue::function(Executable::CoreFn(core_fn)));
     env.set_immut("let", BasicValue::function(Executable::CoreFn(core_let)));
     env.set_immut("def", BasicValue::function(Executable::CoreFn(core_def)));
     env.set_immut("do", BasicValue::function(Executable::CoreFn(core_do)));
     env.set_immut("if", BasicValue::function(Executable::CoreFn(core_if)));
     env.set_immut("quote", BasicValue::function(Executable::CoreFn(core_quote)));
+
+    // utilities
+    env.set_immut("defn", BasicValue::function(Executable::CoreFn(core_defn)));
 }
 
 pub fn quote(vals: &[Value]) -> Value {
