@@ -147,17 +147,18 @@ struct LineIterator {
 }
 
 impl Iterator for LineIterator {
-    type Item = Value;
+    type Item = Eval<Value>;
 
-    fn next(&mut self) -> Option<Value> {
-        self.stream.next_line()
-                   .expect("I/O read error") // TODO: handle
-                   .map(Value::new)
+    fn next(&mut self) -> Option<Eval<Value>> {
+        match self.stream.next_line() {
+            Ok(r) => r.map(Value::new).map(Ok),
+            Err(e) => Some(Err(EvalError::IO(e)))
+        }
     }
 }
 
 impl ValueLike for PolyStream {
-    fn into_seq(&self) -> Vec<Value> { self.into_iter().collect() }
+    fn into_seq(&self) -> Eval<Vec<Value>> { self.into_iter().collect() }
 
     fn into_iter(&self) -> ValueIteratorBox {
         Box::new(LineIterator { stream: self.inner.clone() })
@@ -167,11 +168,11 @@ impl ValueLike for PolyStream {
         Ok(Value::new(PolyStream { inner: self.inner.clone() }))
     }
 
-    fn into_str(&self) -> String {
-        String::from("<polystream>")
+    fn into_str(&self) -> Eval<String> {
+        Ok(String::from("<polystream>"))
     }
 
-    fn into_args(&self) -> Vec<String> {
+    fn into_args(&self) -> Eval<Vec<String>> {
         unimplemented!()
     }
 
@@ -395,16 +396,16 @@ impl PolyLine {
 
 impl ValueLike for PolyLine {
     fn into_iter(&self) -> ValueIteratorBox {
-        Box::new(self.fields.clone().into_iter().map(Value::new))
+        Box::new(self.fields.clone().into_iter().map(Value::new).map(Ok))
     }
 
     fn evaluate(&self, env: &::environment::Environment) -> EvalResult {
         Ok(Value::new(self.clone()))
     }
 
-    fn into_str(&self) -> String {
+    fn into_str(&self) -> Eval<String> {
         let x = self.data.copy(..);
-        String::from_utf8_lossy(x.as_slice()).into_owned()
+        Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
     }
 
     fn first(&self) -> Option<&ValueLike> {
@@ -452,9 +453,9 @@ impl ValueLike for PolyField {
         Ok(Value::new(self.to_owned()))
     }
 
-    fn into_str(&self) -> String {
+    fn into_str(&self) -> Eval<String> {
         let x = self.data.copy(..);
-        String::from_utf8_lossy(x.as_slice()).into_owned()
+        Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
     }
 
     fn into_num(&self) -> Option<Number> {

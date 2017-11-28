@@ -50,13 +50,21 @@ impl Evaluable for Value {
 /// Try to find a command using values from the active environment
 pub fn find_command(cmd: &str) -> Option<Vec<PathBuf>> {
     if let Some(locate) = global().get("shell/locate") {
-        locate.execute(&empty(), &vec![BasicValue::str(cmd)])
-            .ok()
-            .map(|x| {
-                x.into_iter()
-                 .map(|o| PathBuf::from(o.into_str()))
-                 .collect()
-            })
+        let r = locate.execute(&empty(), &vec![BasicValue::str(cmd)])
+                      .and_then(|x| x.into_seq())
+                      .and_then(|x| x.into_iter()
+                                     .map(|o| o.into_str())
+                                     .collect::<Eval<Vec<String>>>()
+                                     .map(|v| v.into_iter()
+                                               .map(PathBuf::from)
+                                               .collect()));
+        match r {
+            Ok(r) => Some(r),
+            Err(e) => {
+                eprintln!("ysh: shell/locate failed: {}", e);
+                None
+            }
+        }
     } else {
         // they somehow unbound shell/locate
         eprintln!("ysh: shell/locate not bound. try running `sys/recover`");

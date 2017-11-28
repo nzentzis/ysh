@@ -32,7 +32,7 @@ use nix::sys::signal;
 
 use environment::{Environment, global, empty};
 use pipeline::{Plan, PlanningError};
-use data::{Value, ValueLike, BasicValue, Executable, EvalResult};
+use data::{Value, ValueLike, BasicValue, Executable, EvalResult, Eval};
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 
@@ -61,12 +61,15 @@ fn locate_executable(env: &Environment, args: &[Value]) -> EvalResult {
 
     let paths = if let Some(p) = env.get("path") { p }
                 else { return Ok(BasicValue::empty()) };
-    let paths: Vec<_> = paths.into_iter().map(|x| x.into_str()).collect();
+    let paths: Vec<String> = paths.into_seq()?
+                                  .into_iter()
+                                  .map(|x| x.into_str())
+                                  .collect::<Eval<Vec<String>>>()?;
     
     // search for the requested files
     let mut res = Vec::with_capacity(args.len());
     for f in args {
-        let f = f.clone().into_str();
+        let f = f.clone().into_str()?;
         for p in paths.iter() {
             let pth = Path::new(p).join(&f);
             if pth.exists() {
@@ -92,7 +95,7 @@ fn init_environment() {
     env.set("print-lines", BasicValue::function(Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
-                    println!("{}", i.into_str());
+                    println!("{}", i?.into_str()?);
                 }
             }
             Ok(BasicValue::empty())

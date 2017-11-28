@@ -335,15 +335,30 @@ impl Plan {
                     let fwd_stdout = idx == (arr_len-1) &&
                                      last_elem == PlanElement::Stdout;
 
+                    // evaluate args
+                    let args = args.into_iter()
+                                   .map(|a| a.evaluate(&empty()))
+                                   .collect::<Eval<Vec<_>>>()
+                                   .and_then(|a| a.into_iter()
+                                                  .map(|x| x.into_args())
+                                                  .collect::<Eval<Vec<_>>>())
+                                   .map(|a| a.into_iter()
+                                             .flat_map(|x| x)
+                                             .collect::<Vec<_>>());
+                    let args = match args {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("ysh: argument evaluation failed: {}", e);
+                            return None;
+                        }
+                    };
+
                     // TODO: redirect or handle stderr
                     // TODO: handle spawn failure
                     // TODO: handle arg evaluation failure
                     let cmd = Command::new(exec)
                                       .invoked_using(invoked_name)
-                                      .args(args.into_iter()
-                                                .flat_map(|x| x.evaluate(&empty())
-                                                               .unwrap()
-                                                               .into_args()))
+                                      .args(args)
                                       .stdin(if last_output == 0 { IoChannel::Inherited }
                                              else {IoChannel::Specific(last_output)})
                                       .stdout(if fwd_stdout { IoChannel::Inherited }
@@ -432,7 +447,7 @@ impl TransformEvaluation {
     /// rules:
     /// 
     /// 1. If the transform value is executable:
-    ///     a. Convert it to a sequence
+    ///     a. Convert it to a sequence (if this fails, return the value)
     ///     b. Append the inner value
     ///     c. Return the result
     /// 2. Evaluate the transform. If the result is executable, perform steps
@@ -450,7 +465,9 @@ impl TransformEvaluation {
             match val {
                 Some(ref x) if x.is_executable() => {
                     let mut arr = vec![x.deref().to_owned()];
-                    arr.extend(xform.into_iter().skip(1));
+                    let args = if let Ok(r) = xform.into_seq() {r}
+                               else {return xform;};
+                    arr.extend(args.into_iter().skip(1));
                     arr.push(inner);
                     return BasicValue::list(arr);
                 },
@@ -521,11 +538,22 @@ impl TransformEvaluation {
             };
             match out {
                 EvalOutput::PrettyStdout => {
-                    println!("{}", res.into_str());
+                    match res.into_str() {
+                        Ok(s) => {
+                            println!("{}", s);
+                        },
+                        Err(e) => {
+                            println!("ysh: cannot convert to string: {}", e);
+                        }
+                    }
                 },
                 EvalOutput::Descriptor(fd) => {
                     let mut f = unsafe {::std::fs::File::from_raw_fd(fd)};
-                    write!(f, "{}", res.into_str());
+                    match res.into_str() {
+                        Ok(r) => {write!(f, "{}", r);},
+                        Err(e) =>
+                            eprintln!("ysh: cannot convert to string: {}", e),
+                    }
                 }
             }
         });

@@ -9,23 +9,22 @@ struct MapIterator {
 }
 
 impl Iterator for MapIterator {
-    type Item = Value;
+    type Item = Eval<Value>;
 
-    fn next(&mut self) -> Option<Value> {
+    fn next(&mut self) -> Option<Eval<Value>> {
         // pull items from param items
         let items: Option<Vec<_>> = self.iters
                                         .iter_mut()
                                         .map(|x| x.next())
                                         .collect();
-
         if let Some(itms) = items {
-            match self.func.execute(&self.env, itms.as_slice()) {
-                Ok(res) => Some(res),
-                Err(e)  => {
-                    // TODO: handle this failure better
-                    None
-                }
-            }
+            let itms: Eval<Vec<_>> = itms.into_iter().collect();
+            let itms = match itms {
+                Ok(i) => i,
+                Err(e) => return Some(Err(e))
+            };
+
+            Some(self.func.execute(&self.env, itms.as_slice()))
         } else {
             None
         }
@@ -78,7 +77,7 @@ fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let itm = &args[0];
         match itm.into_iter().next() {
-            Some(r) => Ok(r),
+            Some(r) => r,
             None    => Ok(BasicValue::list(vec![]))
         }
     } else {
@@ -95,7 +94,7 @@ fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
 fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let itm = &args[0];
-        let res: Vec<_> = itm.into_iter().skip(1).collect();
+        let res = itm.into_iter().skip(1).collect::<Eval<Vec<_>>>()?;
         Ok(BasicValue::list(res))
     } else {
         Err(EvalError::Arity {
@@ -119,17 +118,17 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
         Ok(BasicValue::function(
                 Executable::native(move |env, args| {
-                    let res: Vec<_> = args.iter().filter_map(|v| v.into_iter()
-                                                 .nth(idx as usize))
-                                                 .collect();
+                    let res = args.iter().filter_map(|v| v.into_iter()
+                                         .nth(idx as usize))
+                                         .collect::<Eval<Vec<_>>>()?;
                     if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
                     else { Ok(BasicValue::list(res)) } })))
     } else if args.len() > 1 {
         let idx = if let Some(i) = args[0].into_num().map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
-        let res: Vec<_> = args[1..].iter().filter_map(|v| v.into_iter()
-                                                      .nth(idx as usize))
-                                   .collect();
+        let res = args[1..].iter().filter_map(|v| v.into_iter()
+                                                   .nth(idx as usize))
+                           .collect::<Eval<Vec<_>>>()?;
         if res.len() == 1 {
             Ok(res.into_iter().next().unwrap())
         } else {

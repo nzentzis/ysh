@@ -58,8 +58,9 @@ pub enum BasicValue {
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
-pub type ValueIteratorBox = Box<Iterator<Item=Value>+Send+Sync>;
+pub type ValueIteratorBox = Box<Iterator<Item=EvalResult>+Send+Sync>;
 pub type EvalResult = Result<Value, EvalError>;
+pub type Eval<T> = Result<T, EvalError>;
 
 #[derive(Clone)]
 pub struct Value {
@@ -91,7 +92,9 @@ impl Value {
                 // check the first element to see if we can resolve it
                 if let Some(exec) = m {
                     let body: Result<Vec<_>, EvalError> =
-                        self.into_iter().skip(1)
+                        self.into_seq()?
+                            .into_iter()
+                            .skip(1)
                             .map(|v| v.macroexpand())
                             .collect();
                     return exec.run(&::environment::empty(), body?.as_slice());
@@ -108,7 +111,9 @@ impl fmt::Debug for Value {
         if let Some(b) = self.get_basic() {
             write!(f, "{:?}", b)
         } else {
-            write!(f, "<item: {}>", self.inner.into_str())
+            write!(f, "<item: {}>", self.inner.into_str()
+                                        .unwrap_or_else(|_| String::from(
+                                                "!evaluation failed!")))
         }
     }
 }
@@ -117,12 +122,12 @@ impl ValueLike for Value {
     fn get_basic(&self) -> Option<&BasicValue> { self.inner.get_basic() }
     fn get_symbol(&self) -> Option<Identifier> { self.inner.get_symbol() }
     fn get_string(&self) -> Option<String> { self.inner.get_string() }
-    fn into_seq(&self) -> Vec<Value> { self.inner.into_seq() }
+    fn into_seq(&self) -> Eval<Vec<Value>> { self.inner.into_seq() }
     fn into_iter(&self) -> ValueIteratorBox { self.inner.into_iter() }
-    fn into_str(&self) -> String { self.inner.into_str() }
+    fn into_str(&self) -> Eval<String> { self.inner.into_str() }
     fn into_num(&self) -> Option<Number> { self.inner.into_num() }
     fn into_bool(&self) -> bool { self.inner.into_bool() }
-    fn into_args(&self) -> Vec<String> { self.inner.into_args() }
+    fn into_args(&self) -> Eval<Vec<String>> { self.inner.into_args() }
     fn is_executable(&self) -> bool { self.inner.is_executable() }
     fn evaluate(&self, env: &Environment) -> EvalResult {
         self.inner.evaluate(env)
@@ -133,9 +138,10 @@ impl ValueLike for Value {
     fn first(&self) -> Option<&ValueLike> { self.inner.first() }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum EvalError {
     Unknown,
+    IO(::std::io::Error),
     InvalidOperation(&'static str),
     TypeError(String),
     Arity {
@@ -149,6 +155,8 @@ impl ::std::fmt::Display for EvalError {
         match self {
             &EvalError::Unknown =>
                 write!(f, "Unknown evaluation error"),
+            &EvalError::IO(ref e) =>
+                write!(f, "I/O error: {}", e),
             &EvalError::InvalidOperation(ref s) =>
                 write!(f, "Invalid operation: {}", s),
             &EvalError::TypeError(ref s) =>
@@ -163,11 +171,16 @@ impl ::std::error::Error for EvalError {
     fn description(&self) -> &str {
         match self {
             &EvalError::Unknown => &"unknown evaluation error",
+            &EvalError::IO(_) => &"I/O error",
             &EvalError::InvalidOperation(_) => &"invalid operation",
             &EvalError::TypeError(_) => &"type error",
             &EvalError::Arity{..} => &"arity mismatch",
         }
     }
+}
+
+impl From<::std::io::Error> for EvalError {
+    fn from(e: ::std::io::Error) -> EvalError { EvalError::IO(e) }
 }
 
 /// Trait for basic behavior which applies to all value-like types. If possible,
@@ -193,7 +206,7 @@ pub trait ValueLike : Send + Sync {
     /// Convert into a sequential form
     /// 
     /// This must be equivalent to calling `self.into_iter().collect()`
-    fn into_seq(&self) -> Vec<Value> { self.into_iter().collect() }
+    fn into_seq(&self) -> Eval<Vec<Value>> { self.into_iter().collect() }
 
     /// Generate an iterator over the element's values
     /// 
@@ -202,7 +215,7 @@ pub trait ValueLike : Send + Sync {
     fn into_iter(&self) -> ValueIteratorBox;
 
     /// Convert a value into string form
-    fn into_str(&self) -> String;
+    fn into_str(&self) -> Eval<String>;
 
     /// Convert a value into numeric form
     fn into_num(&self) -> Option<Number> { None }
@@ -211,8 +224,10 @@ pub trait ValueLike : Send + Sync {
     fn into_bool(&self) -> bool { true }
 
     /// Convert into a vector of strings usable as command-line arguments
-    fn into_args(&self) -> Vec<String> {
-        self.into_iter().map(|x| x.into_str()).collect()
+    fn into_args(&self) -> Eval<Vec<String>> {
+        self.into_seq()?
+            .into_iter()
+            .map(|x| x.into_str()).collect()
     }
 
     /// Evaluate this value-like object in a given lexical environment
@@ -269,40 +284,42 @@ impl ValueLike for BasicValue {
         else { None }
     }
 
-    fn into_seq(&self) -> Vec<Value> {
+    fn into_seq(&self) -> Eval<Vec<Value>> {
         if let &BasicValue::List(ref l) = self {
-            l.to_owned()
+            Ok(l.to_owned())
         } else {
-            vec![Value::new(self.to_owned())]
+            Ok(vec![Value::new(self.to_owned())])
         }
     }
 
     fn into_iter(&self) -> ValueIteratorBox {
         if let &BasicValue::List(ref l) = self {
-            Box::new(l.to_owned().into_iter())
+            Box::new(l.to_owned().into_iter().map(Ok))
         } else {
             let itm: Value = Value::new(self.to_owned());
-            Box::new(vec![itm].into_iter())
+            Box::new(vec![itm].into_iter().map(Ok))
         }
     }
 
-    fn into_str(&self) -> String {
+    fn into_str(&self) -> Eval<String> {
         match self {
-            &BasicValue::Boolean(true)       => String::from("true"),
-            &BasicValue::Boolean(false)      => String::from("false"),
-            &BasicValue::Number(ref n)       => format!("{}", n),
-            &BasicValue::Str(ref s)          => s.to_owned(),
-            &BasicValue::Symbol(ref id)      => (*(id.0)).to_owned(),
+            &BasicValue::Boolean(true)       => Ok(String::from("true")),
+            &BasicValue::Boolean(false)      => Ok(String::from("false")),
+            &BasicValue::Number(ref n)       => Ok(format!("{}", n)),
+            &BasicValue::Str(ref s)          => Ok(s.to_owned()),
+            &BasicValue::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
             &BasicValue::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
-                let xs: Vec<_> = l.into_iter().map(|x| x.into_str()).collect();
+                let xs: Vec<_> = l.into_iter()
+                                  .map(|x| x.into_str())
+                                  .collect::<Eval<Vec<_>>>()?;
                 s.push_str(&xs.join(" "));
                 s.push(')');
-                s
+                Ok(s)
             },
-            &BasicValue::Function(_)         => String::from("<function>"),
-            &BasicValue::Macro(_)            => String::from("<macro>"),
+            &BasicValue::Function(_)         => Ok(String::from("<function>")),
+            &BasicValue::Macro(_)            => Ok(String::from("<macro>")),
         }
     }
 
@@ -327,18 +344,15 @@ impl ValueLike for BasicValue {
         }
     }
 
-    fn into_args(&self) -> Vec<String> {
+    fn into_args(&self) -> Eval<Vec<String>> {
         match self {
-            &BasicValue::Boolean(true)       => vec![self.into_str()],
-            &BasicValue::Boolean(false)      => vec![self.into_str()],
-            &BasicValue::Number(ref n)       => vec![self.into_str()],
-            &BasicValue::Str(ref s)          => vec![self.into_str()],
-            &BasicValue::Symbol(ref id)      => vec![self.into_str()],
-            &BasicValue::List(ref l)         => l.into_iter()
-                                           .flat_map(|x| x.into_args())
-                                           .collect(),
-            &BasicValue::Function(_)         => vec![self.into_str()],
-            &BasicValue::Macro(_)            => vec![self.into_str()],
+            &BasicValue::List(ref l) => l.into_iter()
+                                         .map(|x| x.into_args())
+                                         .collect::<Eval<Vec<_>>>()
+                                         .map(|r| r.into_iter()
+                                                   .flat_map(|x| x)
+                                                   .collect()),
+            other => self.into_str().map(|r| vec![r])
         }
     }
 
@@ -426,21 +440,21 @@ impl PartialEq for Value {
     }
 }
 
-struct LazySequenceIterator<I> where I: Iterator<Item=Value>+Send+Sync {
+struct LazySequenceIterator<I> where I: Iterator<Item=Eval<Value>>+Send+Sync {
     item_offset: usize, // offset into items of current element
     items: Arc<Mutex<Vec<Value>>>,
     rest: Arc<Mutex<I>>
 }
 
-impl<I: Iterator<Item=Value>+Send+Sync> Iterator for LazySequenceIterator<I> {
-    type Item = Value;
+impl<I: Iterator<Item=Eval<Value>>+Send+Sync> Iterator for LazySequenceIterator<I> {
+    type Item = Eval<Value>;
 
-    fn next(&mut self) -> Option<Value> {
+    fn next(&mut self) -> Option<Eval<Value>> {
         let mut items = self.items.lock().unwrap();
         if self.item_offset < items.len() {
             let r = items[self.item_offset].clone();
             self.item_offset += 1;
-            return Some(r);
+            return Some(Ok(r));
         }
 
         // no items left in vector - check iterator
@@ -448,10 +462,15 @@ impl<I: Iterator<Item=Value>+Send+Sync> Iterator for LazySequenceIterator<I> {
         match rest.next() {
             None => None,
             Some(itm) => {
+                let itm = match itm {
+                    Ok(r) => r,
+                    Err(e) => return Some(Err(e))
+                };
+
                 // add to the item vec
                 items.push(itm.clone());
                 self.item_offset += 1;
-                return Some(itm)
+                return Some(Ok(itm))
             }
         }
     }
@@ -460,13 +479,13 @@ impl<I: Iterator<Item=Value>+Send+Sync> Iterator for LazySequenceIterator<I> {
 /// Utility type for converting lazy iterators into sequence types
 /// 
 /// Note that this assumes the given iterator ends when `next` returns `None`.
-pub struct LazySequence<I> where I: Iterator<Item=Value>+Send+Sync {
+pub struct LazySequence<I> where I: Iterator<Item=Eval<Value>>+Send+Sync {
     // always lock `items` first if locking both
     items: Arc<Mutex<Vec<Value>>>,
     rest: Arc<Mutex<I>>
 }
 
-impl<I: Iterator<Item=Value>+Send+Sync> LazySequence<I> {
+impl<I: Iterator<Item=Eval<Value>>+Send+Sync> LazySequence<I> {
     pub fn new(iter: I) -> Self {
         LazySequence {
             items: Arc::new(Mutex::new(Vec::new())),
@@ -475,7 +494,7 @@ impl<I: Iterator<Item=Value>+Send+Sync> LazySequence<I> {
     }
 }
 
-impl<I: Iterator<Item=Value>+Send+Sync+'static> ValueLike for LazySequence<I> {
+impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence<I> {
     fn into_iter(&self) -> ValueIteratorBox {
         Box::new(LazySequenceIterator {
             item_offset: 0,
@@ -484,14 +503,16 @@ impl<I: Iterator<Item=Value>+Send+Sync+'static> ValueLike for LazySequence<I> {
         })
     }
 
-    fn into_str(&self) -> String {
+    fn into_str(&self) -> Eval<String> {
         let mut s = String::new();
         s.push('(');
-        let body: Vec<_> = self.into_iter().map(|x| x.into_str()).collect();
+        let body: Vec<_> = self.into_iter()
+                               .map(|x| x.and_then(|x| x.into_str()))
+                               .collect::<Eval<Vec<_>>>()?;
         s.push_str(&body.join(" "));
         s.push(')');
 
-        s
+        Ok(s)
     }
 
     fn evaluate(&self, env: &Environment) -> EvalResult {
@@ -518,7 +539,7 @@ impl fmt::Debug for BasicValue {
     }
 }
 
-impl<I: Iterator<Item=Value>+Send+Sync> Clone for LazySequence<I> {
+impl<I: Iterator<Item=Eval<Value>>+Send+Sync> Clone for LazySequence<I> {
     fn clone(&self) -> Self {
         LazySequence {
             items: Arc::clone(&self.items),

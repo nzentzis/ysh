@@ -83,7 +83,7 @@ fn core_let(lex: &Environment, args: &[Value]) -> EvalResult {
     }
 
     // evaluate bindings
-    let bind_list = args[0].into_seq();
+    let bind_list = args[0].into_seq()?;
     if bind_list.len() % 2 != 0 {
         return Err(EvalError::InvalidOperation(
                 "binding list for let has odd length"));
@@ -145,11 +145,12 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    fn make_pattern(v: &Value) -> Result<Vec<PatternPiece>, EvalError> {
+    fn make_pattern(v: &Value) -> Eval<Vec<PatternPiece>> {
         let mut r = Vec::new();
         let mut next_is_rest = false;
         let mut should_end = false;
         for i in v.into_iter() {
+            let i = i?;
             let s = i.get_symbol()
                      .ok_or(EvalError::TypeError(
                              format!("pattern element cannot be converted to symbol")))?;
@@ -221,7 +222,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
     // it's single form if the first element of the first arg isn't a list
     // since no valid bindings are lists, and multi-form if it *is* a list
     let is_single_form = if let Some(x) = args[0].into_iter().next() {
-            if let Some(&BasicValue::List(_)) = x.get_basic() { false }
+            if let Some(&BasicValue::List(_)) = x?.get_basic() { false }
             else { true } }
         else { true };
 
@@ -233,7 +234,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
         variants.push((pat, vals));
     } else {
         for l in args.iter() {
-            let l = l.into_seq();
+            let l = l.into_seq()?;
             if l.is_empty() {
                 return Err(EvalError::InvalidOperation("empty fn variant spec"));
             }
