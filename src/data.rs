@@ -24,7 +24,7 @@ pub enum Executable {
     /// Similar to the `Native` type, but arguments are not evaluated prior to
     /// running it. The function accepts a reference to the lexical environment
     /// at call time.
-    CoreFn(Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
+    CoreFn(fn(&Environment, &[Value]) -> EvalResult),
 }
 
 impl Executable {
@@ -360,7 +360,11 @@ impl ValueLike for BasicValue {
                 if first.is_executable() {
                     first.execute(env, &xs[1..])
                 } else {
-                    Ok(BasicValue::list(xs.to_owned()))
+                    // evaluate elements when using bare list
+                    let xs: Vec<_> = xs.into_iter()
+                                       .map(|v| v.evaluate(env))
+                                       .collect::<Result<Vec<_>, _>>()?;
+                    Ok(BasicValue::list(xs))
                 }
             },
             &BasicValue::Macro(_,_) => panic!("illegal attempt to evaluate macro"),
@@ -545,7 +549,7 @@ impl Identifier {
 
 impl AsRef<str> for Identifier {
     fn as_ref(&self) -> &str {
-        &(*self.0)
+        &(self.0)
     }
 }
 

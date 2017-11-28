@@ -1,6 +1,6 @@
+pub mod core;
 mod operators;
 mod sequence;
-mod core;
 
 pub fn initialize() {
     operators::initialize();

@@ -265,17 +265,32 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
         }))))
 }
 
+/// Return the literal arguments without interpretation or substitution
+/// 
+/// With one argument, return its quoted form. Otherwise, wrap its args in a
+/// list.
+fn core_quote(lex: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 {
+        Ok(args[0].to_owned())
+    } else {
+        Ok(BasicValue::list(args.iter().cloned()))
+    }
+}
+
 pub fn initialize() {
     let env = global();
 
-    env.set_immut("fn", BasicValue::function(
-            Executable::CoreFn(Arc::new(core_fn))));
-    env.set_immut("let", BasicValue::function(
-            Executable::CoreFn(Arc::new(core_let))));
-    env.set_immut("def", BasicValue::function(
-            Executable::CoreFn(Arc::new(core_def))));
-    env.set_immut("do", BasicValue::function(
-            Executable::CoreFn(Arc::new(core_do))));
-    env.set_immut("if", BasicValue::function(
-            Executable::CoreFn(Arc::new(core_if))));
+    env.set_immut("fn", BasicValue::function(Executable::CoreFn(core_fn)));
+    env.set_immut("let", BasicValue::function(Executable::CoreFn(core_let)));
+    env.set_immut("def", BasicValue::function(Executable::CoreFn(core_def)));
+    env.set_immut("do", BasicValue::function(Executable::CoreFn(core_do)));
+    env.set_immut("if", BasicValue::function(Executable::CoreFn(core_if)));
+    env.set_immut("quote", BasicValue::function(Executable::CoreFn(core_quote)));
+}
+
+pub fn quote(vals: &[Value]) -> Value {
+    let mut r = Vec::with_capacity(vals.len() + 1);
+    r.push(BasicValue::function(Executable::CoreFn(core_quote)));
+    r.extend(vals.iter().cloned());
+    BasicValue::list(r)
 }

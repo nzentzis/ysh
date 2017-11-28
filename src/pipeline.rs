@@ -437,8 +437,8 @@ impl TransformEvaluation {
     ///     c. Return the result
     /// 2. Evaluate the transform. If the result is executable, perform steps
     ///    a, b, and c on the result.
-    /// 3. If the evaluation succeeded, use the evaluation result and ignore the
-    ///    input
+    /// 3. If the evaluation succeeded, return a quoted evaluation result and
+    ///    ignore the input
     /// 4. If the evaluation failed, use the original value
     fn apply_value_xform(xform: Value, inner: Value) -> Value {
         use std::ops::Deref;
@@ -461,12 +461,11 @@ impl TransformEvaluation {
         let modified_xform = xform.evaluate(&::environment::empty());
 
         if let Ok(m) = modified_xform {
-            if let Some(x) = m.first() {
-                if x.is_executable() {
-                    return BasicValue::list(vec![m.clone(), inner]);
-                }
+            if m.is_executable() {
+                return BasicValue::list(vec![m.clone(), inner]);
+            } else {
+                return ::library::core::quote(&[m])
             }
-            m
         } else {
             xform
         }
