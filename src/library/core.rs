@@ -7,16 +7,18 @@ use data::*;
 /// yield the third arg if present and () otherwise
 fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 2 {
-        if args[0].into_bool() {
-            Ok(args[1].clone())
+        let pred = args[0].evaluate(lex)?;
+        if pred.into_bool() {
+            args[1].evaluate(lex)
         } else {
             Ok(BasicValue::empty())
         }
     } else if args.len() == 3 {
-        if args[0].into_bool() {
-            Ok(args[1].clone())
+        let pred = args[0].evaluate(lex)?;
+        if pred.into_bool() {
+            args[1].evaluate(lex)
         } else {
-            Ok(args[2].clone())
+            args[2].evaluate(lex)
         }
     } else {
         Err(EvalError::Arity {
