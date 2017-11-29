@@ -55,6 +55,7 @@ pub enum BasicValue {
     List(Vec<Value>),
     Function(Executable),
     Macro(Executable),
+    Polymorphic(Arc<ValueLike + 'static>),
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
@@ -330,6 +331,7 @@ impl ValueLike for BasicValue {
             },
             &BasicValue::Function(_)         => Ok(String::from("<function>")),
             &BasicValue::Macro(_)            => Ok(String::from("<macro>")),
+            &BasicValue::Polymorphic(ref v)  => v.into_str()
         }
     }
 
@@ -355,6 +357,7 @@ impl ValueLike for BasicValue {
                                          .any(|x| x) }),
             &BasicValue::Function(_)         => Ok(true),
             &BasicValue::Macro(_)            => Ok(true),
+            &BasicValue::Polymorphic(ref v)  => v.into_bool()
         }
     }
 
@@ -402,13 +405,14 @@ impl ValueLike for BasicValue {
 
     fn is_executable(&self) -> bool {
         match self {
-            &BasicValue::Boolean(_)       => false,
-            &BasicValue::Number(_)        => false,
-            &BasicValue::Str(_)           => false,
-            &BasicValue::Symbol(_)        => false,
-            &BasicValue::List(_)          => false,
-            &BasicValue::Function(_)      => true,
-            &BasicValue::Macro(_)         => false,
+            &BasicValue::Boolean(_)         => false,
+            &BasicValue::Number(_)          => false,
+            &BasicValue::Str(_)             => false,
+            &BasicValue::Symbol(_)          => false,
+            &BasicValue::List(_)            => false,
+            &BasicValue::Function(_)        => true,
+            &BasicValue::Macro(_)           => false,
+            &BasicValue::Polymorphic(ref v) => v.is_executable()
         }
     }
 
@@ -423,15 +427,16 @@ impl ValueLike for BasicValue {
     }
 
     fn first(&self) -> Eval<Option<&ValueLike>> {
-        Ok(match self {
-            &BasicValue::Boolean(_)       => Some(self),
-            &BasicValue::Number(_)        => Some(self),
-            &BasicValue::Str(_)           => Some(self),
-            &BasicValue::Symbol(_)        => Some(self),
-            &BasicValue::List(ref v)      => v.first().map(|x| -> &ValueLike {&*x}),
-            &BasicValue::Function(_)      => Some(self),
-            &BasicValue::Macro(_)         => Some(self),
-        })
+        match self {
+            &BasicValue::Boolean(_)         => Ok(Some(self)),
+            &BasicValue::Number(_)          => Ok(Some(self)),
+            &BasicValue::Str(_)             => Ok(Some(self)),
+            &BasicValue::Symbol(_)          => Ok(Some(self)),
+            &BasicValue::List(ref v)        => Ok(v.first().map(|x| -> &ValueLike {&*x})),
+            &BasicValue::Function(_)        => Ok(Some(self)),
+            &BasicValue::Macro(_)           => Ok(Some(self)),
+            &BasicValue::Polymorphic(ref v) => v.first()
+        }
     }
 }
 
@@ -549,6 +554,7 @@ impl fmt::Debug for BasicValue {
             &BasicValue::List(ref v)   => write!(f, "{:?}", v),
             &BasicValue::Function(_)   => write!(f, "<function>"),
             &BasicValue::Macro(_)      => write!(f, "<macro>"),
+            &BasicValue::Polymorphic(ref v) => write!(f, "<polymorphic>"),
         }
     }
 }
