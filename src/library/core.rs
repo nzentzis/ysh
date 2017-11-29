@@ -7,15 +7,15 @@ use data::*;
 /// yield the third arg if present and () otherwise
 fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 2 {
-        let pred = args[0].evaluate(lex)?;
-        if pred.into_bool() {
+        let pred = args[0].evaluate(lex).and_then(|x| x.into_bool())?;
+        if pred {
             args[1].evaluate(lex)
         } else {
             Ok(BasicValue::empty())
         }
     } else if args.len() == 3 {
-        let pred = args[0].evaluate(lex)?;
-        if pred.into_bool() {
+        let pred = args[0].evaluate(lex).and_then(|x| x.into_bool())?;
+        if pred {
             args[1].evaluate(lex)
         } else {
             args[2].evaluate(lex)
@@ -34,14 +34,14 @@ fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
 /// global environment or () if not present.
 fn core_def(lex: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
-        if let Some(ident) = args[0].get_symbol() {
+        if let Some(ident) = args[0].get_symbol()? {
             Ok(global().get(ident).unwrap_or_else(|| BasicValue::empty()))
         } else {
             Err(EvalError::TypeError(
                     format!("argument to def cannot be converted to a symbol")))
         }
     } else if args.len() == 2 {
-        let sym = args[0].get_symbol().ok_or(EvalError::TypeError(
+        let sym = args[0].get_symbol()?.ok_or(EvalError::TypeError(
                 format!("argument to def cannot be converted to a symbol")));
         let sym = sym?;
 
@@ -93,7 +93,7 @@ fn core_let(lex: &Environment, args: &[Value]) -> EvalResult {
 
     let mut e = lex.clone();
     for c in bind_list.chunks(2) {
-        let sym = c[0].get_symbol().ok_or(EvalError::TypeError(format!(
+        let sym = c[0].get_symbol()?.ok_or(EvalError::TypeError(format!(
                     "first argument in let binding cannot be converted to symbol")))?;
         let val = c[1].evaluate(&e)?;
         e.exclusive().set(sym, val);
@@ -153,7 +153,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
         let mut should_end = false;
         for i in v.into_iter() {
             let i = i?;
-            let s = i.get_symbol()
+            let s = i.get_symbol()?
                      .ok_or(EvalError::TypeError(
                              format!("pattern element cannot be converted to symbol")))?;
             if s.as_ref() == "&" {
@@ -224,7 +224,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
     // it's single form if the first element of the first arg isn't a list
     // since no valid bindings are lists, and multi-form if it *is* a list
     let is_single_form = if let Some(x) = args[0].into_iter().next() {
-            if let Some(&BasicValue::List(_)) = x?.get_basic() { false }
+            if let Some(&BasicValue::List(_)) = x?.get_basic()? { false }
             else { true } }
         else { true };
 

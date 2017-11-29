@@ -106,10 +106,14 @@ pub enum PlanningError {
 }
 
 /// Find the plan element for an actual transformation
+/// 
+/// # Panics
+/// This will panic if passed a transformer containing values which generate
+/// evaluation errors in response to any method but `evaluate` or `execute`.
 fn plan_transform(mut xform: Transformer)
         -> Result<PlanElement, PlanningError> {
     let first = xform.0[0].clone();
-    if let Some(s) = first.get_symbol() {
+    if let Some(s) = first.get_symbol().unwrap() {
         // try looking it up
         let r = global().get(&*(s.0));
 
@@ -130,7 +134,7 @@ fn plan_transform(mut xform: Transformer)
 
     // if it's not a string or symbol, just return it
     let cmd: String =
-        if let Some(s) = first.get_string() { s }
+        if let Some(s) = first.get_string().unwrap() { s }
         else {
             if xform.0.len() == 1 {
                 return Ok(PlanElement::Expression(first));
@@ -459,7 +463,7 @@ impl TransformEvaluation {
         use std::ops::Deref;
         if xform.is_executable() {
             return BasicValue::list(vec![xform, inner])
-        } else if let Some(s) = xform.get_symbol() {
+        } else if let Ok(Some(s)) = xform.get_symbol() {
             // try looking up the symbol to get an executable result
             let val = global().get(s.0.deref());
             match val {

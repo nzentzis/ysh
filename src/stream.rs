@@ -176,7 +176,7 @@ impl ValueLike for PolyStream {
         unimplemented!()
     }
 
-    fn first(&self) -> Option<&ValueLike> {
+    fn first(&self) -> Eval<Option<&ValueLike>> {
         unimplemented!()
     }
 }
@@ -408,7 +408,7 @@ impl ValueLike for PolyLine {
         Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
     }
 
-    fn first(&self) -> Option<&ValueLike> {
+    fn first(&self) -> Eval<Option<&ValueLike>> {
         unimplemented!()
     }
 }
@@ -458,7 +458,7 @@ impl ValueLike for PolyField {
         Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
     }
 
-    fn into_num(&self) -> Option<Number> {
+    fn into_num(&self) -> Eval<Option<Number>> {
         use parse::numeric_value;
 
         // try parsing as a number
@@ -468,11 +468,11 @@ impl ValueLike for PolyField {
         if let Ok(n) = n.to_result() {
             n.into_num()
         } else {
-            None
+            Ok(None)
         }
     }
 
-    fn first(&self) -> Option<&ValueLike> {
-        Some(&*self)
+    fn first(&self) -> Eval<Option<&ValueLike>> {
+        Ok(Some(&*self))
     }
 }

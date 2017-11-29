@@ -6,7 +6,7 @@ fn fn_add(env: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut ns = Vec::new();
     for i in args.iter() {
-        match i.into_num() {
+        match i.into_num()? {
             Some(n) => ns.push(n),
             r => return Err(EvalError::TypeError(String::from("non-numeric adds not yet implemented")))
         }
@@ -24,17 +24,17 @@ fn fn_sub(env: &Environment, args: &[Value]) -> EvalResult {
             expected: 1
         })
     } else if args.len() == 1 {
-        let n = if let Some(n) = args[0].into_num() { n }
+        let n = if let Some(n) = args[0].into_num()? { n }
                 else { return Err(EvalError::TypeError(String::from("cannot negate non-numeric type"))) };
         Ok(Value::new(BasicValue::Number(-n)))
     } else {
         let mut n =
-            if let Some(n) = args[0].into_num() { n }
+            if let Some(n) = args[0].into_num()? { n }
             else { return Err(EvalError::TypeError(
                         String::from("cannot subtract from non-numeric type"))) };
 
         for i in args[1..].iter() {
-            if let Some(x) = i.into_num() {
+            if let Some(x) = i.into_num()? {
                 n -= x;
             } else {
                 return Err(EvalError::TypeError(String::from("cannot subtract non-numeric type")))
@@ -50,7 +50,7 @@ fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
     let mut rs = Vec::new();
     let one = Number::int(1);
     for i in args.iter() {
-        match i.into_num() {
+        match i.into_num()? {
             Some(n) => rs.push(n + &one),
             r => return Err(EvalError::TypeError(String::from("non-numeric adds not yet implemented")))
         }

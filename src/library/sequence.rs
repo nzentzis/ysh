@@ -114,7 +114,7 @@ fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
 /// If the given element isn't there, return ()
 fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 { // build transformer
-        let idx = if let Some(i) = args[0].into_num().map(|x| x.round()) { i }
+        let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
         Ok(BasicValue::function(
                 Executable::native(move |env, args| {
@@ -124,7 +124,7 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
                     if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
                     else { Ok(BasicValue::list(res)) } })))
     } else if args.len() > 1 {
-        let idx = if let Some(i) = args[0].into_num().map(|x| x.round()) { i }
+        let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
         let res = args[1..].iter().filter_map(|v| v.into_iter()
                                                    .nth(idx as usize))
