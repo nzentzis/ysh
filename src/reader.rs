@@ -35,7 +35,7 @@ impl ParseError {
             ParseError::Evaluation(e) => e,
             ParseError::UnexpectedEOF =>
                 EvalError::InvalidOperation("unexpected end of file"),
-            ParseError::Syntax(e) => EvalError::InvalidOperation("syntax error")
+            ParseError::Syntax(_) => EvalError::InvalidOperation("syntax error")
         }
     }
 }
@@ -156,11 +156,6 @@ impl<'a, R: Read> PeekReadChars<'a, R> {
     /// Push a value back into the stream
     fn push(&mut self, c: char) {
         self.peek.insert(0, c);
-    }
-
-    /// Terminate the stream and return the peeked chars, if any
-    fn end(mut self) -> Vec<char> {
-        self.peek.clone()
     }
 }
 
@@ -428,7 +423,6 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                           allow_newlines: bool) -> Parse<(Value)> {
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
-    let empty = ::environment::empty();
 
     loop {
         // read a character
@@ -457,7 +451,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
         }
 
         // use a reader macro if applicable
-        let res = if let Some(exec) = table.get(&c) {
+        let res = if let Some(_exec) = table.get(&c) {
             // use a reader macro
             unimplemented!()
         } else {
@@ -597,9 +591,10 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
     enum PRS {
         S, // start state
         F, // reading form
-        PIPE, // pipe separator
-        OUT_RF, OUT_AF, OUT_RV, OUT_AV, // redirects (append/replace) (file/var)
-        IN_F, IN_V, // input redirects (file/var)
+        Pipe, // pipe separator
+        // redirects (append/replace) (file/var)
+        OutReplaceFile, OutAppendFile, OutReplaceVar, OutAppendVar,
+        InFile, InVar, // input redirects (file/var)
     }
 
     let mut s = PRS::S;
@@ -650,20 +645,20 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                             link: Some(mode)
                         };
                         pipeline.elements.push(part);
-                        s = PRS::PIPE;
-                    } else if sym.as_ref() == ">" { s = PRS::OUT_RF; }
-                    else if sym.as_ref() == ">>" { s = PRS::OUT_AF; }
-                    else if sym.as_ref() == ">=" { s = PRS::OUT_RV; }
-                    else if sym.as_ref() == ">>=" { s = PRS::OUT_AV; }
-                    else if sym.as_ref() == "<" { s = PRS::IN_F; }
-                    else if sym.as_ref() == "<=" { s = PRS::IN_V; }
+                        s = PRS::Pipe;
+                    } else if sym.as_ref() == ">" { s = PRS::OutReplaceFile; }
+                    else if sym.as_ref() == ">>" { s = PRS::OutAppendFile; }
+                    else if sym.as_ref() == ">=" { s = PRS::OutReplaceVar; }
+                    else if sym.as_ref() == ">>=" { s = PRS::OutAppendVar; }
+                    else if sym.as_ref() == "<" { s = PRS::InFile; }
+                    else if sym.as_ref() == "<=" { s = PRS::InVar; }
                     else { cur_component.push(tok); }
                 } else {
                     s = PRS::F;
                     cur_component.push(tok);
                 }
             },
-            PRS::PIPE => {
+            PRS::Pipe => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 if let Some(sym) = tok.get_symbol()? {
@@ -679,7 +674,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                     cur_component.push(tok);
                 }
             },
-            PRS::OUT_RF => {
+            PRS::OutReplaceFile => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 
@@ -689,7 +684,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 pipeline.terminals.push(TerminalMode::ReplaceFile(s));
                 return Ok(pipeline);
             },
-            PRS::OUT_AF => {
+            PRS::OutAppendFile => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 
@@ -699,7 +694,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 pipeline.terminals.push(TerminalMode::AppendFile(s));
                 return Ok(pipeline);
             },
-            PRS::OUT_RV => {
+            PRS::OutReplaceVar => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 
@@ -711,7 +706,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                             "expected symbol as output target"));
                 }
             },
-            PRS::OUT_AV => {
+            PRS::OutAppendVar => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 
@@ -723,7 +718,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                             "expected symbol as output target"));
                 }
             },
-            PRS::IN_F => {
+            PRS::InFile => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 
@@ -733,7 +728,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 pipeline.terminals.push(TerminalMode::InputFile(s));
                 return Ok(pipeline);
             },
-            PRS::IN_V => {
+            PRS::InVar => {
                 let tok = if let Some(tok) = tok { tok }
                           else { return Err(ParseError::UnexpectedEOF) };
                 
