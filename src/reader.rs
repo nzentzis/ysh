@@ -471,7 +471,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                     if let ParseStackElement::List(v) = stack.pop().unwrap() {v}
                     else {panic!("impossible parser situation - bad stack state")};
                 peek.next()?;
-                BasicValue::list(v)
+                Value::list(v)
             } else if c == '"' {
                 peek.next()?;
 
@@ -498,7 +498,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                         }
                     }
                 }
-                BasicValue::str(s)
+                Value::str(s)
             } else if c == '\'' {
                 // use the built-in quote macro
                 stack.push(ParseStackElement::Quote);
@@ -507,10 +507,10 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
             } else if c == '+' || c == '-' || (c >= '0' && c <= '9') || c == '.' {
                 // try to read a numeric constant
                 let r = read_number(peek);
-                if let Ok(r) = r { Value::new(BasicValue::Number(r)) }
+                if let Ok(r) = r { Value::Number(r) }
                 else {
                     // fall back to symbol
-                    Value::new(BasicValue::Symbol(read_identifier(peek)?))
+                    Value::Symbol(read_identifier(peek)?)
                 }
             } else if c == '|' {
                 // special handling for pipe symbols since literally any char
@@ -521,26 +521,23 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                 let fwd = peek.next()?;
 
                 if fwd == '>' {
-                    Value::new(BasicValue::Symbol(
-                            Identifier::from(format!("|>"))))
+                    Value::Symbol(Identifier::from(format!("|>")))
                 } else {
                     if peek.peek()? == '>' {
-                        Value::new(BasicValue::Symbol(
-                            Identifier::from(format!("|{}>", fwd))))
+                        Value::Symbol(Identifier::from(format!("|{}>", fwd)))
                     } else {
                         peek.push(fwd);
-                        Value::new(BasicValue::Symbol(
-                                Identifier::from(format!("|"))))
+                        Value::Symbol(Identifier::from(format!("|")))
                     }
                 }
             } else {
                 let id = read_identifier(peek)?;
                 if id.0.as_str() == "true" {
-                    Value::new(BasicValue::Boolean(true))
+                    Value::Boolean(true)
                 } else if id.0.as_str() == "false" {
-                    Value::new(BasicValue::Boolean(false))
+                    Value::Boolean(false)
                 } else {
-                    Value::new(BasicValue::Symbol(id))
+                    Value::Symbol(id)
                 }
             }
         };
@@ -555,8 +552,8 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                 },
                 Some(&mut ParseStackElement::Quote) => {
                     // quote the element
-                    res = BasicValue::list(vec![
-                        Value::new(BasicValue::Symbol(Identifier::new("quote"))),
+                    res = Value::list(vec![
+                        Value::Symbol(Identifier::new("quote")),
                         res]);
                 },
                 None => return Ok((res))

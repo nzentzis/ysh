@@ -124,7 +124,7 @@ fn plan_transform(mut xform: Transformer)
                 if xform.0.len() == 1 {
                     return Ok(PlanElement::Expression(r));
                 } else {
-                    return Ok(PlanElement::Expression(BasicValue::list(xform.0)));
+                    return Ok(PlanElement::Expression(Value::list(xform.0)));
                 }
             } else {
                 return Ok(PlanElement::Expression(r));
@@ -139,7 +139,7 @@ fn plan_transform(mut xform: Transformer)
             if xform.0.len() == 1 {
                 return Ok(PlanElement::Expression(first));
             } else {
-                return Ok(PlanElement::Expression(BasicValue::list(xform.0)));
+                return Ok(PlanElement::Expression(Value::list(xform.0)));
             }
         };
 
@@ -462,7 +462,7 @@ impl TransformEvaluation {
     fn apply_value_xform(xform: Value, inner: Value) -> Value {
         use std::ops::Deref;
         if xform.is_executable() {
-            return BasicValue::list(vec![xform, inner])
+            return Value::list(vec![xform, inner])
         } else if let Ok(Some(s)) = xform.get_symbol() {
             // try looking up the symbol to get an executable result
             let val = global().get(s.0.deref());
@@ -473,7 +473,7 @@ impl TransformEvaluation {
                                else {return xform;};
                     arr.extend(args.into_iter().skip(1));
                     arr.push(inner);
-                    return BasicValue::list(arr);
+                    return Value::list(arr);
                 },
                 _ => {}
             }
@@ -483,7 +483,7 @@ impl TransformEvaluation {
 
         if let Ok(m) = modified_xform {
             if m.is_executable() {
-                return BasicValue::list(vec![m.clone(), inner]);
+                return Value::list(vec![m.clone(), inner]);
             } else {
                 return ::library::core::quote(&[m])
             }

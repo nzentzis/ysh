@@ -5,7 +5,7 @@ use environment::{Environment, run_fn};
 
 /// Try to find a command using values from the active environment
 pub fn find_command(cmd: &str) -> Option<Vec<PathBuf>> {
-    let r = run_fn("shell/locate", &[BasicValue::str(cmd)])
+    let r = run_fn("shell/locate", &[Value::str(cmd)])
         .map(|r| r.and_then(|x| x.into_seq())
              .and_then(|x| x.into_iter()
                             .map(|o| o.into_str())

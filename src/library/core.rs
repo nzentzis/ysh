@@ -11,7 +11,7 @@ fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
         if pred {
             args[1].evaluate(lex)
         } else {
-            Ok(BasicValue::empty())
+            Ok(Value::empty())
         }
     } else if args.len() == 3 {
         let pred = args[0].evaluate(lex).and_then(|x| x.into_bool())?;
@@ -35,7 +35,7 @@ fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
 fn core_def(lex: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         if let Some(ident) = args[0].get_symbol()? {
-            Ok(global().get(ident).unwrap_or_else(|| BasicValue::empty()))
+            Ok(global().get(ident).unwrap_or_else(|| Value::empty()))
         } else {
             Err(EvalError::TypeError(
                     format!("argument to def cannot be converted to a symbol")))
@@ -48,7 +48,7 @@ fn core_def(lex: &Environment, args: &[Value]) -> EvalResult {
         let body = args[1].evaluate(lex)?;
 
         global().set(sym, body);
-        Ok(BasicValue::empty())
+        Ok(Value::empty())
     } else {
         Err(EvalError::Arity {
             expected: 2,
@@ -62,7 +62,7 @@ fn core_def(lex: &Environment, args: &[Value]) -> EvalResult {
 /// Return the output of the last argument form, or () if no arguments were
 /// given.
 fn core_do(lex: &Environment, args: &[Value]) -> EvalResult {
-    let mut r = BasicValue::empty();
+    let mut r = Value::empty();
     for i in args.iter() {
         r = i.evaluate(lex)?;
     }
@@ -204,12 +204,12 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
                 &PatternPiece::Optional(ref i) => {
                     res.push((i.to_owned(),
                     if idx < arg_len { args[idx].clone() }
-                    else { BasicValue::empty() }));
+                    else { Value::empty() }));
                 },
                 &PatternPiece::Rest(ref i) => {
                     res.push((i.to_owned(),
-                    if idx >= arg_len { BasicValue::list(vec![]) }
-                    else { BasicValue::list(args[idx..].iter().cloned()) }));
+                    if idx >= arg_len { Value::list(vec![]) }
+                    else { Value::list(args[idx..].iter().cloned()) }));
                     idx = arg_len;
                     break;
                 },
@@ -224,7 +224,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
     // it's single form if the first element of the first arg isn't a list
     // since no valid bindings are lists, and multi-form if it *is* a list
     let is_single_form = if let Some(x) = args[0].into_iter().next() {
-            if let Some(&BasicValue::List(_)) = x?.get_basic()? { false }
+            if let Some(&Value::List(_)) = x?.get_basic()? { false }
             else { true } }
         else { true };
 
@@ -246,7 +246,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
         }
     }
 
-    Ok(BasicValue::function(Executable::Interpreted(lex.to_owned(),
+    Ok(Value::function(Executable::Interpreted(lex.to_owned(),
         Arc::new(move |env, args| {
             // try matching each pattern
             for &(ref pat, ref body) in variants.iter() {
@@ -276,7 +276,7 @@ fn core_quote(lex: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         Ok(args[0].to_owned())
     } else {
-        Ok(BasicValue::list(args.iter().cloned()))
+        Ok(Value::list(args.iter().cloned()))
     }
 }
 
@@ -298,20 +298,20 @@ pub fn initialize() {
     let env = global();
 
     // special forms
-    env.set_immut("fn", BasicValue::function(Executable::CoreFn(core_fn)));
-    env.set_immut("let", BasicValue::function(Executable::CoreFn(core_let)));
-    env.set_immut("def", BasicValue::function(Executable::CoreFn(core_def)));
-    env.set_immut("do", BasicValue::function(Executable::CoreFn(core_do)));
-    env.set_immut("if", BasicValue::function(Executable::CoreFn(core_if)));
-    env.set_immut("quote", BasicValue::function(Executable::CoreFn(core_quote)));
+    env.set_immut("fn", Value::function(Executable::CoreFn(core_fn)));
+    env.set_immut("let", Value::function(Executable::CoreFn(core_let)));
+    env.set_immut("def", Value::function(Executable::CoreFn(core_def)));
+    env.set_immut("do", Value::function(Executable::CoreFn(core_do)));
+    env.set_immut("if", Value::function(Executable::CoreFn(core_if)));
+    env.set_immut("quote", Value::function(Executable::CoreFn(core_quote)));
 
     // utilities
-    env.set_immut("defn", BasicValue::function(Executable::CoreFn(core_defn)));
+    env.set_immut("defn", Value::function(Executable::CoreFn(core_defn)));
 }
 
 pub fn quote(vals: &[Value]) -> Value {
     let mut r = Vec::with_capacity(vals.len() + 1);
-    r.push(BasicValue::function(Executable::CoreFn(core_quote)));
+    r.push(Value::function(Executable::CoreFn(core_quote)));
     r.extend(vals.iter().cloned());
-    BasicValue::list(r)
+    Value::list(r)
 }

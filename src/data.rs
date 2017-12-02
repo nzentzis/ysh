@@ -46,108 +46,12 @@ impl Executable {
     }
 }
 
-#[derive(Clone)]
-pub enum BasicValue {
-    Boolean(bool),
-    Number(Number), // TODO: more arithmetic tower support
-    Str(String),
-    Symbol(Identifier),
-    List(Vec<Value>),
-    Function(Executable),
-    Macro(Executable),
-    Polymorphic(Arc<ValueLike + 'static>),
-    // TODO: Lazy(Box<FnOnce()->Value>),
-}
-
 pub type ValueIteratorBox = Box<Iterator<Item=EvalResult>+Send+Sync>;
 pub type EvalResult = Result<Value, EvalError>;
 pub type Eval<T> = Result<T, EvalError>;
 
-#[derive(Clone)]
-pub struct Value {
-    inner: Arc<ValueLike + 'static>
-}
-
-impl Value {
-    /// Generate a new value with the given content
-    pub fn new<T: ValueLike + 'static>(x: T) -> Value {
-        Value {
-            inner: Arc::new(x)
-        }
-    }
-
-    /// Perform macro expansion on the contained form
-    pub fn macroexpand(self) -> EvalResult {
-        match self.get_basic()? {
-            Some(&BasicValue::List(ref xs)) => {
-                let macro_expr: Option<Value> =
-                    if let Some(f) = xs.first() {
-                        f.get_symbol()?
-                         .and_then(|sym| ::environment::global().get(&*(sym.0)))
-                    } else { None };
-                let macro_expr =
-                    if let Some(m) = macro_expr {
-                        m.get_basic()?
-                         .and_then(|val| match val {
-                             &BasicValue::Macro(ref exec) => Some(exec.clone()),
-                             _ => None
-                         })
-                    } else { None };
-
-                // check the first element to see if we can resolve it
-                if let Some(exec) = macro_expr {
-                    let body: Result<Vec<_>, EvalError> =
-                        self.into_seq()?
-                            .into_iter()
-                            .skip(1)
-                            .map(|v| v.macroexpand())
-                            .collect();
-                    return exec.run(&::environment::empty(), body?.as_slice());
-                }
-            },
-            _ => {}
-        }
-        Ok(self)
-    }
-}
-
-impl fmt::Debug for Value {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let b = match self.get_basic() {
-            Ok(r) => r,
-            Err(e) => return write!(f, "<eval error in get_basic: {}>", e)
-        };
-        if let Some(b) = b {
-            write!(f, "{:?}", b)
-        } else {
-            write!(f, "<item: {}>", self.inner.into_str()
-                                        .unwrap_or_else(|_| String::from(
-                                                "!evaluation failed!")))
-        }
-    }
-}
-
-impl ValueLike for Value {
-    fn get_basic(&self) -> Eval<Option<&BasicValue>> { self.inner.get_basic() }
-    fn get_symbol(&self) -> Eval<Option<Identifier>> { self.inner.get_symbol() }
-    fn get_string(&self) -> Eval<Option<String>> { self.inner.get_string() }
-    fn into_seq(&self) -> Eval<Vec<Value>> { self.inner.into_seq() }
-    fn into_iter(&self) -> ValueIteratorBox { self.inner.into_iter() }
-    fn into_str(&self) -> Eval<String> { self.inner.into_str() }
-    fn into_num(&self) -> Eval<Option<Number>> { self.inner.into_num() }
-    fn into_bool(&self) -> Eval<bool> { self.inner.into_bool() }
-    fn into_args(&self) -> Eval<Vec<String>> { self.inner.into_args() }
-    fn is_executable(&self) -> bool { self.inner.is_executable() }
-    fn evaluate(&self, env: &Environment) -> EvalResult {
-        self.inner.evaluate(env)
-    }
-    fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
-        self.inner.execute(env, args)
-    }
-    fn first(&self) -> Eval<Option<&ValueLike>> { self.inner.first() }
-}
-
 #[derive(Debug)]
+/// An type representing the errors which can occur when evaluating a form
 pub enum EvalError {
     Unknown,
     IO(::std::io::Error),
@@ -200,7 +104,7 @@ impl From<::std::io::Error> for EvalError {
 /// final content.
 pub trait ValueLike : Send + Sync {
     /// Get the relevant basic value if available
-    fn get_basic(&self) -> Eval<Option<&BasicValue>> { Ok(None) }
+    fn get_basic(&self) -> Eval<Option<&Value>> { Ok(None) }
     
     /// Get the value's symbol (if applicable)
     /// 
@@ -257,69 +161,126 @@ pub trait ValueLike : Send + Sync {
     fn first(&self) -> Eval<Option<&ValueLike>>;
 }
 
-impl BasicValue {
+#[derive(Clone)]
+pub enum Value {
+    Boolean(bool),
+    Number(Number),
+    Str(String),
+    Symbol(Identifier),
+    List(Vec<Value>),
+    Function(Executable),
+    Macro(Executable),
+    Polymorphic(Arc<ValueLike + 'static>),
+    // TODO: Lazy(Box<FnOnce()->Value>),
+
+}
+
+impl Value {
     /// Generate an empty value
     pub fn empty() -> Value {
-        Value::new(BasicValue::List(Vec::new()))
+        Value::List(Vec::new())
+    }
+
+    /// Generate an empty value
+    pub fn new<T: ValueLike+'static>(x: T) -> Value {
+        Value::Polymorphic(Arc::new(x))
     }
 
     /// Generate a new function
     pub fn function(body: Executable) -> Value {
-        Value::new(BasicValue::Function(body))
+        Value::Function(body)
     }
 
     /// Build a new list value
     pub fn list<I: IntoIterator<Item=Value>>(i: I) -> Value {
-        Value::new(BasicValue::List(i.into_iter().collect()))
+        Value::List(i.into_iter().collect())
     }
 
     /// Build a string value
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
-        Value::new(BasicValue::Str(s.borrow().to_owned()))
+        Value::Str(s.borrow().to_owned())
+    }
+
+    /// Perform macro expansion on the contained form
+    pub fn macroexpand(self) -> EvalResult {
+        match self.get_basic()? {
+            Some(&Value::List(ref xs)) => {
+                let macro_expr: Option<Value> =
+                    if let Some(f) = xs.first() {
+                        f.get_symbol()?
+                         .and_then(|sym| ::environment::global().get(&*(sym.0)))
+                    } else { None };
+                let macro_expr =
+                    if let Some(m) = macro_expr {
+                        m.get_basic()?
+                         .and_then(|val| match val {
+                             &Value::Macro(ref exec) => Some(exec.clone()),
+                             _ => None
+                         })
+                    } else { None };
+
+                // check the first element to see if we can resolve it
+                if let Some(exec) = macro_expr {
+                    let body: Result<Vec<_>, EvalError> =
+                        self.into_seq()?
+                            .into_iter()
+                            .skip(1)
+                            .map(|v| v.macroexpand())
+                            .collect();
+                    return exec.run(&::environment::empty(), body?.as_slice());
+                }
+            },
+            _ => {}
+        }
+        Ok(self)
     }
 }
 
-impl ValueLike for BasicValue {
-    fn get_basic(&self) -> Eval<Option<&BasicValue>> { Ok(Some(self)) }
+impl ValueLike for Value {
+    fn get_basic(&self) -> Eval<Option<&Value>> { Ok(Some(self)) }
 
     fn get_symbol(&self) -> Eval<Option<Identifier>> {
-        Ok(
-            if let &BasicValue::Symbol(ref id) = self { Some(id.to_owned()) }
-            else { None })
+        if let &Value::Symbol(ref id) = self { Ok(Some(id.to_owned())) }
+        else if let &Value::Polymorphic(ref p) = self { p.get_symbol() }
+        else { Ok(None) }
     }
 
     fn get_string(&self) -> Eval<Option<String>> {
-        Ok(
-            if let &BasicValue::Symbol(ref id) = self { Some((&*id.0).to_owned()) }
-            else if let &BasicValue::Str(ref s) = self { Some(s.to_owned()) }
-            else { None })
+        if let &Value::Symbol(ref id) = self { Ok(Some((&*id.0).to_owned())) }
+        else if let &Value::Str(ref s) = self { Ok(Some(s.to_owned())) }
+        else if let &Value::Polymorphic(ref p) = self { p.get_string() }
+        else { Ok(None) }
     }
 
     fn into_seq(&self) -> Eval<Vec<Value>> {
-        if let &BasicValue::List(ref l) = self {
+        if let &Value::List(ref l) = self {
             Ok(l.to_owned())
+        } else if let &Value::Polymorphic(ref p) = self {
+            p.into_seq()
         } else {
-            Ok(vec![Value::new(self.to_owned())])
+            Ok(vec![self.to_owned()])
         }
     }
 
     fn into_iter(&self) -> ValueIteratorBox {
-        if let &BasicValue::List(ref l) = self {
+        if let &Value::List(ref l) = self {
             Box::new(l.to_owned().into_iter().map(Ok))
+        } else if let &Value::Polymorphic(ref p) = self {
+            p.into_iter()
         } else {
-            let itm: Value = Value::new(self.to_owned());
+            let itm: Value = self.to_owned();
             Box::new(vec![itm].into_iter().map(Ok))
         }
     }
 
     fn into_str(&self) -> Eval<String> {
         match self {
-            &BasicValue::Boolean(true)       => Ok(String::from("true")),
-            &BasicValue::Boolean(false)      => Ok(String::from("false")),
-            &BasicValue::Number(ref n)       => Ok(format!("{}", n)),
-            &BasicValue::Str(ref s)          => Ok(s.to_owned()),
-            &BasicValue::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
-            &BasicValue::List(ref l)         => {
+            &Value::Boolean(true)       => Ok(String::from("true")),
+            &Value::Boolean(false)      => Ok(String::from("false")),
+            &Value::Number(ref n)       => Ok(format!("{}", n)),
+            &Value::Str(ref s)          => Ok(s.to_owned()),
+            &Value::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
+            &Value::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
                 let xs: Vec<_> = l.into_iter()
@@ -329,15 +290,17 @@ impl ValueLike for BasicValue {
                 s.push(')');
                 Ok(s)
             },
-            &BasicValue::Function(_)         => Ok(String::from("<function>")),
-            &BasicValue::Macro(_)            => Ok(String::from("<macro>")),
-            &BasicValue::Polymorphic(ref v)  => v.into_str()
+            &Value::Function(_)         => Ok(String::from("<function>")),
+            &Value::Macro(_)            => Ok(String::from("<macro>")),
+            &Value::Polymorphic(ref v)  => v.into_str()
         }
     }
 
     fn into_num(&self) -> Eval<Option<Number>> {
-        if let &BasicValue::Number(ref n) = self {
+        if let &Value::Number(ref n) = self {
             Ok(Some(n.to_owned()))
+        } else if let &Value::Polymorphic(ref p) = self {
+            p.into_num()
         } else {
             Ok(None)
         }
@@ -345,25 +308,25 @@ impl ValueLike for BasicValue {
 
     fn into_bool(&self) -> Eval<bool> {
         match self {
-            &BasicValue::Boolean(b)          => Ok(b),
-            &BasicValue::Number(ref n)       => Ok(n.round() != 0),
-            &BasicValue::Str(ref s)          => Ok(!s.is_empty()),
-            &BasicValue::Symbol(ref id)      => Ok(true),
-            &BasicValue::List(ref l) => Ok(
+            &Value::Boolean(b)          => Ok(b),
+            &Value::Number(ref n)       => Ok(n.round() != 0),
+            &Value::Str(ref s)          => Ok(!s.is_empty()),
+            &Value::Symbol(ref id)      => Ok(true),
+            &Value::List(ref l) => Ok(
                 if l.is_empty() { false }
                 else { l.iter().map(|x| x.into_bool())
                                          .collect::<Eval<Vec<bool>>>()?
                                          .into_iter()
                                          .any(|x| x) }),
-            &BasicValue::Function(_)         => Ok(true),
-            &BasicValue::Macro(_)            => Ok(true),
-            &BasicValue::Polymorphic(ref v)  => v.into_bool()
+            &Value::Function(_)         => Ok(true),
+            &Value::Macro(_)            => Ok(true),
+            &Value::Polymorphic(ref v)  => v.into_bool()
         }
     }
 
     fn into_args(&self) -> Eval<Vec<String>> {
         match self {
-            &BasicValue::List(ref l) => l.into_iter()
+            &Value::List(ref l) => l.into_iter()
                                          .map(|x| x.into_args())
                                          .collect::<Eval<Vec<_>>>()
                                          .map(|r| r.into_iter()
@@ -375,17 +338,17 @@ impl ValueLike for BasicValue {
 
     fn evaluate(&self, env: &Environment) -> EvalResult {
         match self {
-            &BasicValue::Symbol(ref s) => {
+            &Value::Symbol(ref s) => {
                 // try looking it up
                 if let Some(v) = env.get(&*(s.0)) {
                     Ok(v)
                 } else {
-                    Ok(Value::new(self.clone()))
+                    Ok(self.clone())
                 }
             },
-            &BasicValue::List(ref xs) => {
+            &Value::List(ref xs) => {
                 // evaluate () as ()
-                if xs.is_empty() { return Ok(BasicValue::list(vec![])); }
+                if xs.is_empty() { return Ok(Value::list(vec![])); }
                 let first = xs[0].evaluate(env)?;
 
                 if first.is_executable() {
@@ -395,24 +358,24 @@ impl ValueLike for BasicValue {
                     let xs: Vec<_> = xs.into_iter()
                                        .map(|v| v.evaluate(env))
                                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(BasicValue::list(xs))
+                    Ok(Value::list(xs))
                 }
             },
-            &BasicValue::Macro(_)   => panic!("illegal attempt to evaluate macro"),
-            r => Ok(Value::new(r.to_owned()))
+            &Value::Macro(_)   => panic!("illegal attempt to evaluate macro"),
+            r => Ok(r.to_owned())
         }
     }
 
     fn is_executable(&self) -> bool {
         match self {
-            &BasicValue::Boolean(_)         => false,
-            &BasicValue::Number(_)          => false,
-            &BasicValue::Str(_)             => false,
-            &BasicValue::Symbol(_)          => false,
-            &BasicValue::List(_)            => false,
-            &BasicValue::Function(_)        => true,
-            &BasicValue::Macro(_)           => false,
-            &BasicValue::Polymorphic(ref v) => v.is_executable()
+            &Value::Boolean(_)         => false,
+            &Value::Number(_)          => false,
+            &Value::Str(_)             => false,
+            &Value::Symbol(_)          => false,
+            &Value::List(_)            => false,
+            &Value::Function(_)        => true,
+            &Value::Macro(_)           => false,
+            &Value::Polymorphic(ref v) => v.is_executable()
         }
     }
 
@@ -420,22 +383,23 @@ impl ValueLike for BasicValue {
         match self {
             // TODO: force evaluate args in outer environment
             // delegate to inner evaluation function
-            &BasicValue::Function(ref f) => f.run(env, args),
-            &BasicValue::Macro(_)   => panic!("illegal attempt to execute macro"),
+            &Value::Function(ref f) => f.run(env, args),
+            &Value::Macro(_)        => panic!("illegal attempt to execute macro"),
+            &Value::Polymorphic(ref v) => v.execute(env, args),
             x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
         }
     }
 
     fn first(&self) -> Eval<Option<&ValueLike>> {
         match self {
-            &BasicValue::Boolean(_)         => Ok(Some(self)),
-            &BasicValue::Number(_)          => Ok(Some(self)),
-            &BasicValue::Str(_)             => Ok(Some(self)),
-            &BasicValue::Symbol(_)          => Ok(Some(self)),
-            &BasicValue::List(ref v)        => Ok(v.first().map(|x| -> &ValueLike {&*x})),
-            &BasicValue::Function(_)        => Ok(Some(self)),
-            &BasicValue::Macro(_)           => Ok(Some(self)),
-            &BasicValue::Polymorphic(ref v) => v.first()
+            &Value::Boolean(_)         => Ok(Some(self)),
+            &Value::Number(_)          => Ok(Some(self)),
+            &Value::Str(_)             => Ok(Some(self)),
+            &Value::Symbol(_)          => Ok(Some(self)),
+            &Value::List(ref v)        => Ok(v.first().map(|x| -> &ValueLike {&*x})),
+            &Value::Function(_)        => Ok(Some(self)),
+            &Value::Macro(_)           => Ok(Some(self)),
+            &Value::Polymorphic(ref v) => v.first()
         }
     }
 }
@@ -544,17 +508,17 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
     }
 }
 
-impl fmt::Debug for BasicValue {
+impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            &BasicValue::Boolean(b)    => write!(f, "<bool:{}>", b),
-            &BasicValue::Number(ref n) => write!(f, "<num:{}>", n),
-            &BasicValue::Str(ref s)    => write!(f, "<str:\"{}\">", s),
-            &BasicValue::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
-            &BasicValue::List(ref v)   => write!(f, "{:?}", v),
-            &BasicValue::Function(_)   => write!(f, "<function>"),
-            &BasicValue::Macro(_)      => write!(f, "<macro>"),
-            &BasicValue::Polymorphic(ref v) => write!(f, "<polymorphic>"),
+            &Value::Boolean(b)    => write!(f, "<bool:{}>", b),
+            &Value::Number(ref n) => write!(f, "<num:{}>", n),
+            &Value::Str(ref s)    => write!(f, "<str:\"{}\">", s),
+            &Value::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
+            &Value::List(ref v)   => write!(f, "{:?}", v),
+            &Value::Function(_)   => write!(f, "<function>"),
+            &Value::Macro(_)      => write!(f, "<macro>"),
+            &Value::Polymorphic(ref v) => write!(f, "<polymorphic>"),
         }
     }
 }

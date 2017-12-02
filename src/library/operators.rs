@@ -12,7 +12,7 @@ fn fn_add(env: &Environment, args: &[Value]) -> EvalResult {
         }
     }
 
-    Ok(Value::new(BasicValue::Number(ns.into_iter().fold(Number::int(0), |a,b| a+b))))
+    Ok(Value::new(Value::Number(ns.into_iter().fold(Number::int(0), |a,b| a+b))))
 }
 
 /// If used with one arg, negate it
@@ -26,7 +26,7 @@ fn fn_sub(env: &Environment, args: &[Value]) -> EvalResult {
     } else if args.len() == 1 {
         let n = if let Some(n) = args[0].into_num()? { n }
                 else { return Err(EvalError::TypeError(String::from("cannot negate non-numeric type"))) };
-        Ok(Value::new(BasicValue::Number(-n)))
+        Ok(Value::new(Value::Number(-n)))
     } else {
         let mut n =
             if let Some(n) = args[0].into_num()? { n }
@@ -41,7 +41,7 @@ fn fn_sub(env: &Environment, args: &[Value]) -> EvalResult {
             }
         }
 
-        Ok(Value::new(BasicValue::Number(n)))
+        Ok(Value::new(Value::Number(n)))
     }
 }
 
@@ -57,17 +57,17 @@ fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
     }
 
     let rs: Vec<_> = rs.into_iter()
-                       .map(BasicValue::Number)
+                       .map(Value::Number)
                        .map(Value::new)
                        .collect();
     if rs.len() == 1 { Ok(rs.into_iter().next().unwrap()) }
-    else { Ok(BasicValue::list(rs)) }
+    else { Ok(Value::list(rs)) }
 }
 
 pub fn initialize() {
     let env = global();
-    env.set("+", BasicValue::function(Executable::native(fn_add)));
-    env.set("-", BasicValue::function(Executable::native(fn_sub)));
+    env.set("+", Value::function(Executable::native(fn_add)));
+    env.set("-", Value::function(Executable::native(fn_sub)));
 
-    env.set("inc", BasicValue::function(Executable::native(fn_inc)));
+    env.set("inc", Value::function(Executable::native(fn_inc)));
 }

@@ -55,7 +55,7 @@ fn fn_map(env: &Environment, args: &[Value]) -> EvalResult {
     //             until one list runs out of elements
     if args.len() == 1 {
         let func = args[0].clone();
-        return Ok(BasicValue::function(
+        return Ok(Value::function(
                 Executable::native(move |env, args| {
                     map_impl(env, &func, args)
                 })));
@@ -78,7 +78,7 @@ fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
         let itm = &args[0];
         match itm.into_iter().next() {
             Some(r) => r,
-            None    => Ok(BasicValue::list(vec![]))
+            None    => Ok(Value::list(vec![]))
         }
     } else {
         Err(EvalError::Arity {
@@ -95,7 +95,7 @@ fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let itm = &args[0];
         let res = itm.into_iter().skip(1).collect::<Eval<Vec<_>>>()?;
-        Ok(BasicValue::list(res))
+        Ok(Value::list(res))
     } else {
         Err(EvalError::Arity {
             got: args.len(),
@@ -116,13 +116,13 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 { // build transformer
         let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
-        Ok(BasicValue::function(
+        Ok(Value::function(
                 Executable::native(move |env, args| {
                     let res = args.iter().filter_map(|v| v.into_iter()
                                          .nth(idx as usize))
                                          .collect::<Eval<Vec<_>>>()?;
                     if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
-                    else { Ok(BasicValue::list(res)) } })))
+                    else { Ok(Value::list(res)) } })))
     } else if args.len() > 1 {
         let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
@@ -132,7 +132,7 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
         if res.len() == 1 {
             Ok(res.into_iter().next().unwrap())
         } else {
-            Ok(BasicValue::list(res))
+            Ok(Value::list(res))
         }
     } else {
         Err(EvalError::Arity {
@@ -144,8 +144,8 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
 
 pub fn initialize() {
     let env = global();
-    env.set("map", BasicValue::function(Executable::native(fn_map)));
-    env.set("first", BasicValue::function(Executable::native(fn_first)));
-    env.set("rest", BasicValue::function(Executable::native(fn_rest)));
-    env.set("nth", BasicValue::function(Executable::native(fn_nth)));
+    env.set("map", Value::function(Executable::native(fn_map)));
+    env.set("first", Value::function(Executable::native(fn_first)));
+    env.set("rest", Value::function(Executable::native(fn_rest)));
+    env.set("nth", Value::function(Executable::native(fn_nth)));
 }
