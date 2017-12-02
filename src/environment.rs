@@ -116,3 +116,10 @@ pub fn global() -> &'static GlobalEnvironment { &ENV }
 
 /// Get an empty environment
 pub fn empty() -> Environment { EMPTY.clone() }
+
+/// Query the global environment for an object and execute it with the given
+/// args and an empty lexical environment
+pub fn run_fn<S: AsRef<str>>(key: S, args: &[Value]) -> Option<Eval<Value>> {
+    ENV.get(key)
+       .map(|v| v.execute(&empty(), args))
+}

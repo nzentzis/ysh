@@ -527,7 +527,14 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                     }
                 }
             } else {
-                Value::new(BasicValue::Symbol(read_identifier(peek)?))
+                let id = read_identifier(peek)?;
+                if id.0.as_str() == "true" {
+                    Value::new(BasicValue::Boolean(true))
+                } else if id.0.as_str() == "false" {
+                    Value::new(BasicValue::Boolean(false))
+                } else {
+                    Value::new(BasicValue::Symbol(id))
+                }
             }
         };
 

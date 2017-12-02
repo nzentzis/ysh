@@ -554,7 +554,7 @@ impl TransformEvaluation {
                 EvalOutput::Descriptor(fd) => {
                     let mut f = unsafe {::std::fs::File::from_raw_fd(fd)};
                     match res.into_str() {
-                        Ok(r) => {write!(f, "{}", r);},
+                        Ok(r) => {write!(f, "{}", r).unwrap();},
                         Err(e) =>
                             eprintln!("ysh: cannot convert to string: {}", e),
                     }
