@@ -9,7 +9,7 @@ use termion::raw::IntoRawMode;
 use termion::input::TermRead;
 
 use data::*;
-use parse::pipeline;
+use reader::read_pipeline;
 use editor::{LineEditor, EditingDiscipline};
 use editor::basic;
 
@@ -94,15 +94,14 @@ impl<'a> ActiveEditor<'a> {
                 if r.as_bytes().iter().all(|x| *x == b' ') {
                     self.redraw_prompt()?;
                 } else {
+                    let mut s = io::Cursor::new(r);
+
                     // need to add \r here since we're still in raw mode
-                    match pipeline(r.as_bytes()) {
-                        IResult::Done(_, r) => { return Ok(r); },
-                        IResult::Error(e) => {
-                            println!("ysh: syntax error: {}\r", e.description());
+                    match read_pipeline(&mut s) {
+                        Ok(r) => return Ok(r),
+                        Err(e) => {
+                            println!("ysh: {}\r", e);
                         },
-                        IResult::Incomplete(n) => {
-                            println!("ysh: multiline splits not implemented\r");
-                        }
                     }
                     self.output.flush()?;
                 }

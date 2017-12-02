@@ -403,7 +403,14 @@ fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
     let mut s = String::with_capacity(32);
     s.push(c);
     loop {
-        let c = peek.peek()?;
+        let c = peek.peek()
+                    .map(Some)
+                    .or_else(|e|
+                         if e.kind() == io::ErrorKind::UnexpectedEof {Ok(None)}
+                         else {Err(e)})?;
+
+        // stop the ident if we hit EOF
+        let c = if let Some(c) = c { c } else { break };
 
         if c != ')' && !c.is_whitespace() {
             s.push(c);
