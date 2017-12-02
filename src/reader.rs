@@ -22,6 +22,60 @@ enum ParseStackElement {
     Quote,
 }
 
+#[derive(Debug)]
+pub enum ParseError {
+    Evaluation(EvalError),
+    Syntax(&'static str),
+    UnexpectedEOF,
+}
+
+impl ParseError {
+    pub fn to_eval(self) -> EvalError {
+        match self {
+            ParseError::Evaluation(e) => e,
+            ParseError::UnexpectedEOF =>
+                EvalError::InvalidOperation("unexpected end of file"),
+            ParseError::Syntax(e) => EvalError::InvalidOperation("syntax error")
+        }
+    }
+}
+
+impl ::std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        match self {
+            &ParseError::Evaluation(ref e) => write!(f, "Evaluation error: {}", e),
+            &ParseError::UnexpectedEOF => write!(f, "Unexpected end of file"),
+            &ParseError::Syntax(ref e) => write!(f, "Syntax error: {}", e),
+        }
+    }
+}
+
+impl ::std::error::Error for ParseError {
+    fn description(&self) -> &str {
+        match self {
+            &ParseError::Evaluation(_) => "evaluation error",
+            &ParseError::UnexpectedEOF => "unexpected end of file",
+            &ParseError::Syntax(_) => "syntax error",
+        }
+    }
+}
+
+impl From<io::Error> for ParseError {
+    fn from(e: io::Error) -> ParseError {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            ParseError::UnexpectedEOF
+        } else {
+            ParseError::Evaluation(EvalError::IO(e))
+        }
+    }
+}
+
+impl From<EvalError> for ParseError {
+    fn from(e: EvalError) -> ParseError { ParseError::Evaluation(e) }
+}
+
+pub type Parse<T> = Result<T, ParseError>;
+
 /// Reads a UTF-8 character from the given stream
 /// 
 /// # Errors
@@ -113,7 +167,7 @@ impl<'a, R: Read> PeekReadChars<'a, R> {
 /// Read a numeric value from the given input stream
 /// 
 /// Upon read failure, push the chars back into the peek stream
-fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Eval<Number> {
+fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Parse<Number> {
     #[derive(Debug)]
     enum St {
         S,
@@ -171,7 +225,10 @@ fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Eval<Number> {
                 else if c == 'b' { s = St::RB; }
                 else if c == '.' { s = St::DOT0; }
                 else if c == 'e' || c == 'E' { s = St::EXP; }
-                else if c.is_digit(10) { s = St::NUM0; }
+                else if c == '+' || c == '-' {
+                    s = St::CPM;
+                    split_idx = data.len();
+                } else if c.is_digit(10) { s = St::NUM0; }
                 else { break Some(()) }
             },
             St::NUM0 => {
@@ -307,10 +364,24 @@ fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Eval<Number> {
                 Ok(Number::int(i64::from_str_radix(&data, 10).unwrap())),
             St::NUM1 => Ok(Number::real(f64::from_str(&data).unwrap())),
             St::EDIG => Ok(Number::real(f64::from_str(&data).unwrap())),
-            St::HEX =>
-                Ok(Number::int(i64::from_str_radix(&data[2..], 16).unwrap())),
-            St::BIN =>
-                Ok(Number::int(i64::from_str_radix(&data[2..], 2).unwrap())),
+            St::HEX => {
+                // from_str_radix doesn't handle prefix signs
+                let sign = data.chars().next().unwrap();
+                let n = if sign == '+' || sign == '-' { &data[3..] }
+                        else { &data[2..] };
+                let n = i64::from_str_radix(n, 16).unwrap();
+                let n = if sign == '-' { -n } else { n };
+                Ok(Number::int(n))
+            },
+            St::BIN => {
+                // from_str_radix doesn't handle prefix signs
+                let sign = data.chars().next().unwrap();
+                let n = if sign == '+' || sign == '-' { &data[3..] }
+                        else { &data[2..] };
+                let n = i64::from_str_radix(n, 2).unwrap();
+                let n = if sign == '-' { -n } else { n };
+                Ok(Number::int(n))
+            },
             St::RNUM1 => {
                 // find number components
                 let a = i64::from_str_radix(&data[..split_idx], 10).unwrap();
@@ -323,15 +394,15 @@ fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Eval<Number> {
                 let b = f64::from_str(&data[split_idx..max_idx-1]).unwrap();
                 Ok(Number::complex(a,b))
             },
-            _ => unimplemented!()
+            _ => panic!("unexpected numeric read state")
         }
     } else {
         for c in data.chars() { strm.push(c); }
-        return Err(EvalError::InvalidOperation("cannot read number"));
+        return Err(ParseError::Syntax("cannot read number"));
     }
 }
 
-fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Eval<Identifier> {
+fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
     let c = peek.next()?;
 
     let mut s = String::with_capacity(32);
@@ -353,8 +424,8 @@ fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Eval<Identifier> {
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-pub fn read<R: Read>(strm: &mut R) -> Eval<(Value, Vec<char>)> {
-    let mut peek = PeekReadChars::new(strm);
+fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
+                          allow_newlines: bool) -> Parse<(Value)> {
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
     let empty = ::environment::empty();
@@ -366,7 +437,9 @@ pub fn read<R: Read>(strm: &mut R) -> Eval<(Value, Vec<char>)> {
                    .or_else(|e| {
                        if e.kind() == io::ErrorKind::UnexpectedEof { Ok(None) }
                        else { Err(e) }})?;
-            if !c.map(|x| x.is_whitespace()).unwrap_or(false) { break c }
+            if !c.map(|x| x.is_whitespace() &&
+                          !(x == '\n' && !allow_newlines))
+                 .unwrap_or(false) { break c }
 
             // skip whitespace
             peek.next()?;
@@ -374,8 +447,14 @@ pub fn read<R: Read>(strm: &mut R) -> Eval<(Value, Vec<char>)> {
 
         let c = if let Some(c) = c { c } else {
             // handle EOF
-            unimplemented!()
+            return Err(ParseError::UnexpectedEOF);
         };
+
+        // if we got here, we're not allowing newlines - treat this just like
+        // EOF
+        if c == '\n' {
+            return Err(ParseError::UnexpectedEOF);
+        }
 
         // use a reader macro if applicable
         let res = if let Some(exec) = table.get(&c) {
@@ -426,11 +505,11 @@ pub fn read<R: Read>(strm: &mut R) -> Eval<(Value, Vec<char>)> {
                 continue;
             } else if c == '+' || c == '-' || (c >= '0' && c <= '9') || c == '.' {
                 // try to read a numeric constant
-                let r = read_number(&mut peek);
+                let r = read_number(peek);
                 if let Ok(r) = r { Value::new(BasicValue::Number(r)) }
                 else {
                     // fall back to symbol
-                    Value::new(BasicValue::Symbol(read_identifier(&mut peek)?))
+                    Value::new(BasicValue::Symbol(read_identifier(peek)?))
                 }
             } else if c == '|' {
                 // special handling for pipe symbols since literally any char
@@ -454,7 +533,7 @@ pub fn read<R: Read>(strm: &mut R) -> Eval<(Value, Vec<char>)> {
                     }
                 }
             } else {
-                Value::new(BasicValue::Symbol(read_identifier(&mut peek)?))
+                Value::new(BasicValue::Symbol(read_identifier(peek)?))
             }
         };
 
@@ -472,16 +551,247 @@ pub fn read<R: Read>(strm: &mut R) -> Eval<(Value, Vec<char>)> {
                         Value::new(BasicValue::Symbol(Identifier::new("quote"))),
                         res]);
                 },
-                None => return Ok((res, peek.end()))
+                None => return Ok((res))
             }
             stack.pop();
         }
     }
 }
 
+/// Read a Lisp form from the given input stream
+/// 
+/// This returns either an evaluation failure or a (read value, unconsumed char)
+/// pair. In most cases the unconsumed character can be ignored.
+pub fn read<R: Read>(strm: &mut R) -> Parse<Value> {
+    let mut peek = PeekReadChars::new(strm);
+    internal_read(&mut peek, true)
+}
+
 /// Read a pipeline from the given input stream
 /// 
-/// This just reads forms from the input and constructs a pipeline out of them
-pub fn read_pipeline<R: Read>(strm: &mut R) -> Eval<Pipeline> {
-    unimplemented!()
+/// This just reads forms from the input and processes them into a pipeline.
+/// Reader macros run *before* this sees the forms.
+pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
+    let mut pipeline = Pipeline {
+        elements: Vec::new(),
+        terminals: Vec::new()
+    };
+    let mut peek = PeekReadChars::new(strm);
+
+    fn get_pipe(id: &Identifier) -> Option<PipeMode> {
+        let s: &str = id.as_ref();
+        if s == "|" { Some(PipeMode::Pipe) }
+        else if s == "|>" { Some(PipeMode::PipeText) }
+        else if s.chars().count() == 3 {
+            let mut chars = s.chars();
+            let f = chars.next().unwrap();
+            let s = chars.next().unwrap();
+            let l = chars.next().unwrap();
+            if f == '|' && l == '>' { Some(PipeMode::DelimitedPipe(s)) }
+            else { None }
+        } else { None }
+    }
+
+    // pipeline read state
+    #[derive(Debug)]
+    enum PRS {
+        S, // start state
+        F, // reading form
+        PIPE, // pipe separator
+        OUT_RF, OUT_AF, OUT_RV, OUT_AV, // redirects (append/replace) (file/var)
+        IN_F, IN_V, // input redirects (file/var)
+    }
+
+    let mut s = PRS::S;
+    let mut cur_component = Vec::new();
+
+    loop {
+        let tok = internal_read(&mut peek, false).map(Some)
+                 .or_else(|e| match e {
+                     ParseError::UnexpectedEOF => Ok(None),
+                     e => Err(e)
+                 })?;
+
+        match s {
+            PRS::S => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                if let Some(sym) = tok.get_symbol()? {
+                    // check if it's a pipe separator
+                    if get_pipe(&sym).is_some() {
+                        return Err(ParseError::Syntax(
+                                "invalid pipeline"));
+                    } else {
+                        s = PRS::F;
+                        cur_component.push(tok);
+                    }
+                } else {
+                    s = PRS::F;
+                    cur_component.push(tok);
+                }
+            },
+            PRS::F => {
+                let tok = if let Some(tok) = tok { tok } else {
+                    // if EOF, terminate the pipeline
+                        let part = PipelineComponent {
+                            xform: Transformer(cur_component.drain(..).collect()),
+                            link: None
+                        };
+                        pipeline.elements.push(part);
+                        return Ok(pipeline);
+                };
+
+                if let Some(sym) = tok.get_symbol()? {
+                    // check if it's a pipe separator
+                    if let Some(mode) = get_pipe(&sym) {
+                        // finish the component
+                        let part = PipelineComponent {
+                            xform: Transformer(cur_component.drain(..).collect()),
+                            link: Some(mode)
+                        };
+                        pipeline.elements.push(part);
+                        s = PRS::PIPE;
+                    } else if sym.as_ref() == ">" { s = PRS::OUT_RF; }
+                    else if sym.as_ref() == ">>" { s = PRS::OUT_AF; }
+                    else if sym.as_ref() == ">=" { s = PRS::OUT_RV; }
+                    else if sym.as_ref() == ">>=" { s = PRS::OUT_AV; }
+                    else if sym.as_ref() == "<" { s = PRS::IN_F; }
+                    else if sym.as_ref() == "<=" { s = PRS::IN_V; }
+                    else { cur_component.push(tok); }
+                } else {
+                    s = PRS::F;
+                    cur_component.push(tok);
+                }
+            },
+            PRS::PIPE => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                if let Some(sym) = tok.get_symbol()? {
+                    // check if it's a pipe separator
+                    if get_pipe(&sym).is_some() {
+                        return Err(ParseError::Syntax("invalid pipeline"));
+                    } else {
+                        s = PRS::F;
+                        cur_component.push(tok);
+                    }
+                } else {
+                    s = PRS::F;
+                    cur_component.push(tok);
+                }
+            },
+            PRS::OUT_RF => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                
+                // evaluate the token and try converting to a string
+                let res = tok.evaluate(&::environment::empty())?;
+                let s = res.into_str()?;
+                pipeline.terminals.push(TerminalMode::ReplaceFile(s));
+                return Ok(pipeline);
+            },
+            PRS::OUT_AF => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                
+                // evaluate the token and try converting to a string
+                let res = tok.evaluate(&::environment::empty())?;
+                let s = res.into_str()?;
+                pipeline.terminals.push(TerminalMode::AppendFile(s));
+                return Ok(pipeline);
+            },
+            PRS::OUT_RV => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                
+                if let Some(sym) = tok.get_symbol()? {
+                    pipeline.terminals.push(TerminalMode::SetVariable(sym));
+                    return Ok(pipeline);
+                } else {
+                    return Err(ParseError::Syntax(
+                            "expected symbol as output target"));
+                }
+            },
+            PRS::OUT_AV => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                
+                if let Some(sym) = tok.get_symbol()? {
+                    pipeline.terminals.push(TerminalMode::AppendVariable(sym));
+                    return Ok(pipeline);
+                } else {
+                    return Err(ParseError::Syntax(
+                            "expected symbol as output target"));
+                }
+            },
+            PRS::IN_F => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                
+                // evaluate the token and try converting to a string
+                let res = tok.evaluate(&::environment::empty())?;
+                let s = res.into_str()?;
+                pipeline.terminals.push(TerminalMode::InputFile(s));
+                return Ok(pipeline);
+            },
+            PRS::IN_V => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Err(ParseError::UnexpectedEOF) };
+                
+                if let Some(sym) = tok.get_symbol()? {
+                    pipeline.terminals.push(TerminalMode::InputVar(sym));
+                    return Ok(pipeline);
+                } else {
+                    return Err(ParseError::Syntax(
+                            "expected symbol as output target"));
+                }
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn numbers() {
+        let cases = vec![
+            (&b"0"[..], Number::int(0)),
+            (&b"0x1a"[..], Number::int(0x1a)),
+            (&b"0x1A"[..], Number::int(0x1a)),
+            (&b"-0x1A"[..], Number::int(-0x1a)),
+            (&b"+0x2A"[..], Number::int(0x2a)),
+            (&b"0x02"[..], Number::int(2)),
+            (&b"0b1101"[..], Number::int(13)),
+            (&b"0b0100"[..], Number::int(4)),
+            (&b"-0b0100"[..], Number::int(-4)),
+            (&b"14"[..], Number::int(14)),
+            (&b"027"[..], Number::int(27)),
+
+            (&b"0.2"[..], Number::real(0.2)),
+            (&b"-0.2"[..], Number::real(-0.2)),
+            (&b"+0.2"[..], Number::real(0.2)),
+            (&b"0.2e7"[..], Number::real(2000000.0)),
+            (&b"0.2e+7"[..], Number::real(2000000.0)),
+            (&b"0.2e-7"[..], Number::real(0.2e-7)),
+            (&b"-0.2e-7"[..], Number::real(-0.2e-7)),
+
+            (&b"1/2"[..], Number::rational(1, 2)),
+            (&b"-1/2"[..], Number::rational(-1, 2)),
+            (&b"-02/7"[..], Number::rational(-2, 7)),
+
+            (&b"0+2i"[..], Number::complex(0.,2.)),
+            (&b"1-2i"[..], Number::complex(1.,-2.)),
+            (&b"+1+2i"[..], Number::complex(1.,2.)),
+            (&b"+1.27e-0+2i"[..], Number::complex(1.27,2.)),
+            (&b"+1.27e-0+2.2i"[..], Number::complex(1.27,2.2)),
+            (&b"+1.27e-0+2.2e-1i"[..], Number::complex(1.27,0.22)),
+        ];
+
+        for (i,o) in cases {
+            let r = read_number(&mut PeekReadChars::new(&mut Cursor::new(i)));
+            assert_eq!(r.unwrap(), o);
+        }
+    }
 }

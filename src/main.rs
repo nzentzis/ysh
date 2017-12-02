@@ -6,6 +6,7 @@ extern crate libc;
 extern crate nix;
 
 mod numeric;
+mod reader;
 #[allow(dead_code)] mod data;
 #[allow(dead_code)] mod globals;
 #[allow(dead_code)] mod environment;
@@ -33,6 +34,7 @@ use nix::sys::signal;
 use environment::{Environment, global, empty};
 use pipeline::{Plan, PlanningError};
 use data::{Value, ValueLike, BasicValue, Executable, EvalResult, Eval};
+use reader::ParseError;
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 
@@ -101,8 +103,31 @@ fn init_environment() {
             Ok(BasicValue::empty())
         })));
 
+    env.set("dbg", BasicValue::function(Executable::native(|_, args| {
+            for a in args {
+                for i in a.into_iter() {
+                    println!("{:?}", i?.get_basic()?);
+                }
+            }
+            Ok(BasicValue::empty())
+        })));
+
     env.set("shell/locate", BasicValue::function(
         Executable::native(locate_executable)));
+
+    env.set("try-read", BasicValue::function(
+        Executable::native(|_,_| reader::read(&mut ::std::io::stdin())
+                                .map_err(ParseError::to_eval)
+                           )));
+
+    env.set("try-read-pl", BasicValue::function(
+        Executable::native(|_,_| reader::read_pipeline(&mut ::std::io::stdin())
+                                .and_then(|x| {
+                                    println!("{:?}", x);
+                                    Ok(BasicValue::empty())
+                                })
+                                .map_err(ParseError::to_eval)
+                           )));
 
     env.set("exit", BasicValue::function(Executable::native(|_,_| {
             RUN_SHELL.store(false, Ordering::Relaxed);

@@ -193,6 +193,7 @@ named!(pub pipeline<Pipeline>,
                base.push(last);
                Pipeline { elements: base, terminals: terms } }))));
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,3 +370,4 @@ mod tests {
                         terminals: vec![]}));
     }
 }
+*/
