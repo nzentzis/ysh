@@ -412,7 +412,7 @@ fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
         // stop the ident if we hit EOF
         let c = if let Some(c) = c { c } else { break };
 
-        if c != ')' && !c.is_whitespace() {
+        if c != '(' && c != ')' && !c.is_whitespace() {
             s.push(c);
             peek.next()?;
         } else {
@@ -468,8 +468,10 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                 continue;
             } else if c == ')' {
                 let v =
-                    if let ParseStackElement::List(v) = stack.pop().unwrap() {v}
-                    else {panic!("impossible parser situation - bad stack state")};
+                    if let Some(ParseStackElement::List(v)) = stack.pop() {v}
+                    else {
+                        return Err(ParseError::Syntax("unexpected ')'"))
+                    };
                 peek.next()?;
                 Value::list(v)
             } else if c == '"' {
