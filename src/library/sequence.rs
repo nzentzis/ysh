@@ -142,10 +142,24 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+/// Concatenate the sequential forms of multiple inputs
+///
+///     (concat xs ys zs) = ((nth 0 xs) (nth 1 ys) (nth 2 zs) ...
+///                          (nth 0 xs) (nth 1 ys) (nth 2 zs) ...
+///                          (nth 0 xs) (nth 1 ys) (nth 2 zs) ...)
+fn fn_concat(env: &Environment, args: &[Value]) -> EvalResult {
+    let mut r = Vec::new();
+    for v in args {
+        r.append(&mut v.into_seq()?);
+    }
+    Ok(Value::list(r))
+}
+
 pub fn initialize() {
     let env = global();
     env.set("map", Value::from(Executable::native(fn_map)));
     env.set("first", Value::from(Executable::native(fn_first)));
     env.set("rest", Value::from(Executable::native(fn_rest)));
     env.set("nth", Value::from(Executable::native(fn_nth)));
+    env.set("concat", Value::from(Executable::native(fn_concat)));
 }

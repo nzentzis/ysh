@@ -211,8 +211,10 @@ impl Value {
             ValueData::List(ref xs) => {
                 let macro_expr: Option<Value> =
                     if let Some(f) = xs.first() {
-                        f.get_symbol()?
-                         .and_then(|sym| ::environment::global().get(&*(sym.0)))
+                        if f.is_macro() { Some(f.to_owned()) }
+                        else { f.get_symbol()?
+                                .and_then(|sym|
+                                          ::environment::global().get(&*(sym.0))) }
                     } else { None };
                 let macro_expr =
                     if let Some(m) = macro_expr {
@@ -224,18 +226,19 @@ impl Value {
 
                 // check the first element to see if we can resolve it
                 if let Some(exec) = macro_expr {
-                    let body: Result<Vec<_>, EvalError> =
-                        self.into_seq()?
-                            .into_iter()
-                            .skip(1)
-                            .map(|v| v.macroexpand())
-                            .collect();
-                    return exec.run(&::environment::empty(), body?.as_slice());
+                    let body = self.into_seq()?;
+                    let r = exec.run(&::environment::empty(), &body[1..])?;
+                    return r.macroexpand();
                 }
             },
             _ => {}
         }
         Ok(self)
+    }
+
+    /// Check whether the value is a macro
+    pub fn is_macro(&self) -> bool {
+        if let &ValueData::Macro(_) = &self.data { true } else { false }
     }
 }
 
@@ -378,7 +381,6 @@ impl ValueLike for Value {
                     Ok(Value::list(xs))
                 }
             },
-            &ValueData::Macro(_)   => panic!("illegal attempt to evaluate macro"),
             r => Ok(self.to_owned())
         }
     }

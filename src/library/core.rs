@@ -280,6 +280,30 @@ fn core_quote(lex: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+// TODO: add local binding for external environment
+/// Define a macro with the given name
+/// 
+/// This operates like to `defn`, but the constructed function is stored as a
+/// macro rather than as a normal function.
+fn core_defmacro(lex: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() < 1 {
+        return Err(EvalError::Arity { got: 0, expected: 3 });
+    }
+
+    // convert the function into a macro
+    let mut m = core_fn(lex, &args[1..])?;
+    let d = if let ValueData::Function(e) = m.data.clone() { e }
+            else { panic!("invalid value result from fn call") };
+    m.data = ValueData::Macro(d);
+
+    let name = args[0].get_symbol()?.ok_or(EvalError::TypeError(
+            format!("argument to def cannot be converted to a symbol")));
+    let name = name?;
+
+    global().set(name, m);
+    Ok(Value::empty())
+}
+
 /// Utility function combining `def` and `fn`
 /// 
 /// The first argument is interpreted as in `def`, and the remainder are
@@ -303,12 +327,16 @@ pub fn initialize() {
     env.set_immut("def", Value::from(Executable::CoreFn(core_def)));
     env.set_immut("do", Value::from(Executable::CoreFn(core_do)));
     env.set_immut("if", Value::from(Executable::CoreFn(core_if)));
+
+    // macros and quoting
     env.set_immut("quote", Value::from(Executable::CoreFn(core_quote)));
+    env.set_immut("defmacro", Value::from(Executable::CoreFn(core_defmacro)));
 
     // utilities
     env.set_immut("defn", Value::from(Executable::CoreFn(core_defn)));
 }
 
+/// Generate a value with the passed args wrapped in a call to `quote`
 pub fn quote(vals: &[Value]) -> Value {
     let mut r = Vec::with_capacity(vals.len() + 1);
     r.push(Value::from(Executable::CoreFn(core_quote)));

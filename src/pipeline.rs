@@ -119,7 +119,7 @@ fn plan_transform(mut xform: Transformer)
 
         // if we find it, use that
         if let Some(r) = r {
-            if r.is_executable() {
+            if r.is_executable() | r.is_macro() {
                 // only convert to a list when there's more than one element
                 if xform.0.len() == 1 {
                     return Ok(PlanElement::Expression(r));
@@ -479,7 +479,9 @@ impl TransformEvaluation {
             }
         }
 
-        let modified_xform = xform.evaluate(&::environment::empty());
+        let modified_xform = xform.clone()
+                                  .macroexpand()
+                                  .and_then(|e| e.evaluate(&::environment::empty()));
 
         if let Ok(m) = modified_xform {
             if m.is_executable() {
@@ -509,7 +511,7 @@ impl TransformEvaluation {
             Value::new(TransformEvaluation::build_innermost_elem(input, first));
 
         // TODO: Support for killing active transforms
-        for elem in elements.into_iter() {
+        for elem in elements {
             // turn it into a viable transform
             innermost = match elem {
                 PlanElement::Expression(v) =>
