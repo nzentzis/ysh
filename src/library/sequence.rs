@@ -241,7 +241,7 @@ fn fn_length(env: &Environment, args: &[Value]) -> EvalResult {
 /// Check whether an input's sequential form is empty
 /// 
 /// If supplied with multiple arguments, returns whether all are empty.
-fn fn_emptyQ(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_empty_q(env: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().all(|x| x.into_iter().next().is_none())))
 }
 
@@ -256,6 +256,72 @@ fn fn_concat(env: &Environment, args: &[Value]) -> EvalResult {
     })))
 }
 
+struct ConsIterator {
+    inner: ValueIteratorBox,
+    items: Vec<Value>
+}
+
+impl Iterator for ConsIterator {
+    type Item = Eval<Value>;
+
+    fn next(&mut self) -> Option<Eval<Value>> {
+        if !self.items.is_empty() { return Some(Ok(self.items.remove(0))) }
+        self.inner.next()
+    }
+}
+
+/// Add one or more items to the beginning of the provided sequence
+/// 
+/// All items after the first are added *in order* to the first element. For
+/// example, `(cons (1 2 3) 4 5 6)` would return `(4 5 6 1 2 3)`.
+fn fn_cons(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() < 2 {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 2
+        })
+    } else {
+        Ok(Value::new(LazySequence::new(ConsIterator {
+            inner: args[0].into_iter(),
+            items: args[1..].iter().cloned().collect()
+        })))
+    }
+}
+
+struct ConjIterator {
+    inner: Option<ValueIteratorBox>,
+    items: Vec<Value>
+}
+
+impl Iterator for ConjIterator {
+    type Item = Eval<Value>;
+
+    fn next(&mut self) -> Option<Eval<Value>> {
+        if let Some(ref mut iter) = self.inner.as_mut() {
+            if let Some(i) = iter.next() { return Some(i); }
+        }
+        self.inner = None;
+        
+        if self.items.is_empty() { None }
+        else { Some(Ok(self.items.remove(0))) }
+    }
+}
+
+/// Add one or more items to the end of the provided sequence
+fn fn_conj(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() < 2 {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 2
+        })
+    } else {
+        Ok(Value::new(LazySequence::new(ConjIterator {
+            inner: Some(args[0].into_iter()),
+            items: args[1..].iter().cloned().collect()
+        })))
+    }
+}
+
 pub fn initialize() {
     let env = global();
     
@@ -265,11 +331,17 @@ pub fn initialize() {
 
     // queries
     env.set("length", Value::from(Executable::native(fn_length)));
-    env.set("empty?", Value::from(Executable::native(fn_emptyQ)));
+    env.set("empty?", Value::from(Executable::native(fn_empty_q)));
 
-    // modification/processing
+    // taking subranges
     env.set("first", Value::from(Executable::native(fn_first)));
     env.set("rest", Value::from(Executable::native(fn_rest)));
     env.set("nth", Value::from(Executable::native(fn_nth)));
+
+    // list-list ops
     env.set("concat", Value::from(Executable::native(fn_concat)));
+
+    // list-item ops
+    env.set("cons", Value::from(Executable::native(fn_cons)));
+    env.set("conj", Value::from(Executable::native(fn_conj)));
 }

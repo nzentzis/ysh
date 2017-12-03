@@ -176,7 +176,7 @@ impl ValueLike for PolyStream {
         unimplemented!()
     }
 
-    fn first(&self) -> Eval<Option<&ValueLike>> {
+    fn first(&self) -> Eval<Option<Value>> {
         unimplemented!()
     }
 }
@@ -408,7 +408,7 @@ impl ValueLike for PolyLine {
         Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
     }
 
-    fn first(&self) -> Eval<Option<&ValueLike>> {
+    fn first(&self) -> Eval<Option<Value>> {
         unimplemented!()
     }
 }
@@ -472,7 +472,7 @@ impl ValueLike for PolyField {
         }
     }
 
-    fn first(&self) -> Eval<Option<&ValueLike>> {
-        Ok(Some(&*self))
+    fn first(&self) -> Eval<Option<Value>> {
+        Ok(Some(Value::new(self.to_owned())))
     }
 }

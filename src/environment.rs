@@ -103,11 +103,13 @@ impl GlobalEnvironment {
     }
 
     pub fn set<K: AsRef<str>>(&self, key: K, val: Value) {
-        self.set_key(key, val, true);
+        let id = Identifier::new(key.as_ref());
+        self.set_key(key, val.rename(id), true);
     }
 
     pub fn set_immut<K: AsRef<str>>(&self, key: K, val: Value) {
-        self.set_key(key, val, false);
+        let id = Identifier::new(key.as_ref());
+        self.set_key(key, val.rename(id), false);
     }
 }
 

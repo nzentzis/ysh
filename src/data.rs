@@ -155,7 +155,7 @@ pub trait ValueLike : Send + Sync {
     }
 
     /// Get the first element of the object's sequential form
-    fn first(&self) -> Eval<Option<&ValueLike>>;
+    fn first(&self) -> Eval<Option<Value>>;
 }
 
 #[derive(Clone)]
@@ -174,34 +174,47 @@ pub enum ValueData {
 #[derive(Clone, Debug)]
 pub struct Value {
     pub data: ValueData,
+    pub name: Option<Identifier>,
 }
 
 impl Value {
+    /// Change the value's name
+    pub fn rename(self, name: Identifier) -> Value {
+        Value {
+            data: self.data,
+            name: Some(name)
+        }
+    }
+
     /// Generate an empty value
     pub fn empty() -> Value {
         Value {
-            data: ValueData::List(Vec::new())
+            data: ValueData::List(Vec::new()),
+            name: None
         }
     }
 
     /// Generate an empty value
     pub fn new<T: ValueLike+'static>(x: T) -> Value {
         Value {
-            data: ValueData::Polymorphic(Arc::new(x))
+            data: ValueData::Polymorphic(Arc::new(x)),
+            name: None
         }
     }
 
     /// Build a new list value
     pub fn list<I: IntoIterator<Item=Value>>(i: I) -> Value {
         Value {
-            data: ValueData::List(i.into_iter().collect())
+            data: ValueData::List(i.into_iter().collect()),
+            name: None
         }
     }
 
     /// Build a string value
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
         Value {
-            data: ValueData::Str(s.borrow().to_owned())
+            data: ValueData::Str(s.borrow().to_owned()),
+            name: None
         }
     }
 
@@ -243,19 +256,39 @@ impl Value {
 }
 
 impl From<Executable> for Value {
-    fn from(e: Executable) -> Value { Value { data: ValueData::Function(e)} }
+    fn from(e: Executable) -> Value {
+        Value {
+            data: ValueData::Function(e),
+            name: None
+        }
+    }
 }
 
 impl From<Number> for Value {
-    fn from(n: Number) -> Value { Value { data: ValueData::Number(n)} }
+    fn from(n: Number) -> Value {
+        Value {
+            data: ValueData::Number(n),
+            name: None
+        }
+    }
 }
 
 impl From<Identifier> for Value {
-    fn from(i: Identifier) -> Value { Value { data: ValueData::Symbol(i)} }
+    fn from(i: Identifier) -> Value {
+        Value {
+            data: ValueData::Symbol(i),
+            name: None
+        }
+    }
 }
 
 impl From<bool> for Value {
-    fn from(x: bool) -> Value { Value { data: ValueData::Boolean(x)} }
+    fn from(x: bool) -> Value {
+        Value {
+            data: ValueData::Boolean(x),
+            name: None
+        }
+    }
 }
 
 impl ValueLike for Value {
@@ -310,7 +343,10 @@ impl ValueLike for Value {
                 s.push(')');
                 Ok(s)
             },
-            &ValueData::Function(_)         => Ok(String::from("<function>")),
+            &ValueData::Function(_)         => Ok(match &self.name {
+                &None        => String::from("<anonymous fn>"),
+                &Some(ref s) => format!("<fn '{}'>", s.as_ref()),
+            }),
             &ValueData::Macro(_)            => Ok(String::from("<macro>")),
             &ValueData::Polymorphic(ref v)  => v.into_str()
         }
@@ -381,6 +417,7 @@ impl ValueLike for Value {
                     Ok(Value::list(xs))
                 }
             },
+            &ValueData::Polymorphic(ref p) => p.evaluate(env),
             r => Ok(self.to_owned())
         }
     }
@@ -409,15 +446,15 @@ impl ValueLike for Value {
         }
     }
 
-    fn first(&self) -> Eval<Option<&ValueLike>> {
+    fn first(&self) -> Eval<Option<Value>> {
         match &self.data {
-            &ValueData::Boolean(_)         => Ok(Some(self)),
-            &ValueData::Number(_)          => Ok(Some(self)),
-            &ValueData::Str(_)             => Ok(Some(self)),
-            &ValueData::Symbol(_)          => Ok(Some(self)),
-            &ValueData::List(ref v)        => Ok(v.first().map(|x| -> &ValueLike {&*x})),
-            &ValueData::Function(_)        => Ok(Some(self)),
-            &ValueData::Macro(_)           => Ok(Some(self)),
+            &ValueData::Boolean(_)         => Ok(Some(self.clone())),
+            &ValueData::Number(_)          => Ok(Some(self.clone())),
+            &ValueData::Str(_)             => Ok(Some(self.clone())),
+            &ValueData::Symbol(_)          => Ok(Some(self.clone())),
+            &ValueData::List(ref v)        => Ok(v.first().map(|x| x.clone())),
+            &ValueData::Function(_)        => Ok(Some(self.clone())),
+            &ValueData::Macro(_)           => Ok(Some(self.clone())),
             &ValueData::Polymorphic(ref v) => v.first()
         }
     }
@@ -518,12 +555,41 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
     }
 
     fn evaluate(&self, env: &Environment) -> EvalResult {
-        Ok(Value::new((*self).clone()))
+        // evaluate first so iterators act like lists
+        if let Some(first) = self.first()? {
+            let first = first.evaluate(env)?;
+            if first.is_executable() {
+                let s = self.into_iter().collect::<Eval<Vec<_>>>()?;
+                return first.execute(env, &s[1..]);
+            }
+        }
+
+        // otherwise evaluate every entry
+        let env = env.to_owned();
+        let iter: ValueIteratorBox = Box::new(LazySequenceIterator {
+                item_offset: 0,
+                items: Arc::clone(&self.items),
+                rest: Arc::clone(&self.rest),
+            }.map(move |i| i.and_then(|x| x.evaluate(&env))));
+        Ok(Value::new(LazySequence::new(iter)))
     }
 
-    fn first(&self) -> Eval<Option<&ValueLike>> {
-        // TODO: try to find an efficient way to do this in the future
-        Ok(None)
+    fn first(&self) -> Eval<Option<Value>> {
+        let mut itms = self.items.lock().unwrap();
+        if itms.is_empty() {
+            // try to pull more
+            let mut itr = self.rest.lock().unwrap();
+            match itr.next() {
+                None => return Ok(None),
+                Some(itm) => {
+                    let itm = itm?;
+                    itms.push(itm);
+                    return Ok(itms.first().map(|x| x.clone()))
+                }
+            }
+        } else {
+            Ok(itms.first().map(|x| x.clone()))
+        }
     }
 }
 
