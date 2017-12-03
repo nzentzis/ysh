@@ -70,6 +70,64 @@ fn fn_map(env: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+struct FilterIterator {
+    inputs: Vec<ValueIteratorBox>,
+    env: Environment,
+    func: Value
+}
+
+impl Iterator for FilterIterator {
+    type Item = Eval<Value>;
+
+    fn next(&mut self) -> Option<Eval<Value>> {
+        loop {
+            if self.inputs.is_empty() { return None }
+            if let Some(ref mut iter) = self.inputs.first_mut() {
+                if let Some(r) = iter.next() {
+                    let r = if let Ok(r) = r { r } else { return Some(r) };
+                    let cond = self.func.execute(&self.env, &[r.clone()])
+                                        .and_then(|x| x.into_bool());
+                    let cond = if let Ok(c) = cond {c} else {
+                        return Some(Err(cond.unwrap_err()))
+                    };
+
+                    if cond { return Some(Ok(r)); }
+                    else { continue; }
+                }
+            }
+            self.inputs.remove(0);
+        }
+    }
+}
+
+fn filter_impl(env: &Environment, func: &Value, args: &[Value]) -> EvalResult {
+    Ok(Value::new(LazySequence::new(FilterIterator {
+        inputs: args.iter().map(|x| x.into_iter()).collect(),
+        env: env.to_owned(),
+        func: func.to_owned()
+    })))
+}
+
+/// Filter a sequence using a function
+/// 
+/// On 1 arg: build transformer
+/// On 2 args: perform normal filter operation
+/// On 3 args: filter over concatenated args
+fn fn_filter(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 {
+        let func = args[0].clone();
+        return Ok(Value::from(Executable::native(move |env, args| {
+            filter_impl(env, &func, args) })));
+    } else if args.len() >= 2 {
+        filter_impl(env, &args[0], &args[1..])
+    } else {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 1
+        })
+    }
+}
+
 /// Take the first element of an input sequence
 /// 
 /// If the input is empty, returns ()
@@ -142,22 +200,74 @@ fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+struct ConcatIterator {
+    inner: Vec<ValueIteratorBox>
+}
+
+impl Iterator for ConcatIterator {
+    type Item = Eval<Value>;
+
+    fn next(&mut self) -> Option<Eval<Value>> {
+        if self.inner.is_empty() { return None }
+
+        if let Some(ref mut iter) = self.inner.first_mut() {
+            if let Some(r) = iter.next() { return Some(r) }
+        }
+        self.inner.remove(0);
+        self.next()
+    }
+}
+
+/// Get the length of an input's sequential form
+/// 
+/// If more than one argument is given, return a list of lengths.
+fn fn_length(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 {
+        Ok(Value::from(Number::int(args[0].into_seq()?.len() as i64)))
+    } else if args.len() > 1 {
+        Ok(Value::list(args.iter()
+                           .map(|x| x.into_seq())
+                           .collect::<Eval<Vec<Vec<_>>>>()?
+                           .into_iter()
+                           .map(|v| Value::from(Number::int(v.len() as i64)))))
+    } else {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 1
+        })
+    }
+}
+
+/// Check whether an input's sequential form is empty
+/// 
+/// If supplied with multiple arguments, returns whether all are empty.
+fn fn_emptyQ(env: &Environment, args: &[Value]) -> EvalResult {
+    Ok(Value::from(args.iter().all(|x| x.into_iter().next().is_none())))
+}
+
 /// Concatenate the sequential forms of multiple inputs
 ///
 ///     (concat xs ys zs) = ((nth 0 xs) (nth 1 ys) (nth 2 zs) ...
 ///                          (nth 0 xs) (nth 1 ys) (nth 2 zs) ...
 ///                          (nth 0 xs) (nth 1 ys) (nth 2 zs) ...)
 fn fn_concat(env: &Environment, args: &[Value]) -> EvalResult {
-    let mut r = Vec::new();
-    for v in args {
-        r.append(&mut v.into_seq()?);
-    }
-    Ok(Value::list(r))
+    Ok(Value::new(LazySequence::new(ConcatIterator {
+        inner: args.iter().map(|x| x.into_iter()).collect()
+    })))
 }
 
 pub fn initialize() {
     let env = global();
+    
+    // higher-order stuff
     env.set("map", Value::from(Executable::native(fn_map)));
+    env.set("filter", Value::from(Executable::native(fn_filter)));
+
+    // queries
+    env.set("length", Value::from(Executable::native(fn_length)));
+    env.set("empty?", Value::from(Executable::native(fn_emptyQ)));
+
+    // modification/processing
     env.set("first", Value::from(Executable::native(fn_first)));
     env.set("rest", Value::from(Executable::native(fn_rest)));
     env.set("nth", Value::from(Executable::native(fn_nth)));
