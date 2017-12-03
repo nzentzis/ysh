@@ -507,10 +507,10 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
             } else if c == '+' || c == '-' || (c >= '0' && c <= '9') || c == '.' {
                 // try to read a numeric constant
                 let r = read_number(peek);
-                if let Ok(r) = r { Value::Number(r) }
+                if let Ok(r) = r { Value::from(r) }
                 else {
                     // fall back to symbol
-                    Value::Symbol(read_identifier(peek)?)
+                    Value::from(read_identifier(peek)?)
                 }
             } else if c == '|' {
                 // special handling for pipe symbols since literally any char
@@ -521,23 +521,23 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                 let fwd = peek.next()?;
 
                 if fwd == '>' {
-                    Value::Symbol(Identifier::from(format!("|>")))
+                    Value::from(Identifier::from(format!("|>")))
                 } else {
                     if peek.peek()? == '>' {
-                        Value::Symbol(Identifier::from(format!("|{}>", fwd)))
+                        Value::from(Identifier::from(format!("|{}>", fwd)))
                     } else {
                         peek.push(fwd);
-                        Value::Symbol(Identifier::from(format!("|")))
+                        Value::from(Identifier::from(format!("|")))
                     }
                 }
             } else {
                 let id = read_identifier(peek)?;
                 if id.0.as_str() == "true" {
-                    Value::Boolean(true)
+                    Value::from(true)
                 } else if id.0.as_str() == "false" {
-                    Value::Boolean(false)
+                    Value::from(false)
                 } else {
-                    Value::Symbol(id)
+                    Value::from(id)
                 }
             }
         };
@@ -553,7 +553,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                 Some(&mut ParseStackElement::Quote) => {
                     // quote the element
                     res = Value::list(vec![
-                        Value::Symbol(Identifier::new("quote")),
+                        Value::from(Identifier::new("quote")),
                         res]);
                 },
                 None => return Ok((res))

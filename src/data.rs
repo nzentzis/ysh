@@ -103,9 +103,6 @@ impl From<::std::io::Error> for EvalError {
 /// These functions may block, if the value is lazy and has not yet computed its
 /// final content.
 pub trait ValueLike : Send + Sync {
-    /// Get the relevant basic value if available
-    fn get_basic(&self) -> Eval<Option<&Value>> { Ok(None) }
-    
     /// Get the value's symbol (if applicable)
     /// 
     /// This should *not* perform any conversions -- just return existing data
@@ -162,7 +159,7 @@ pub trait ValueLike : Send + Sync {
 }
 
 #[derive(Clone)]
-pub enum Value {
+pub enum ValueData {
     Boolean(bool),
     Number(Number),
     Str(String),
@@ -172,39 +169,46 @@ pub enum Value {
     Macro(Executable),
     Polymorphic(Arc<ValueLike + 'static>),
     // TODO: Lazy(Box<FnOnce()->Value>),
+}
 
+#[derive(Clone, Debug)]
+pub struct Value {
+    pub data: ValueData,
 }
 
 impl Value {
     /// Generate an empty value
     pub fn empty() -> Value {
-        Value::List(Vec::new())
+        Value {
+            data: ValueData::List(Vec::new())
+        }
     }
 
     /// Generate an empty value
     pub fn new<T: ValueLike+'static>(x: T) -> Value {
-        Value::Polymorphic(Arc::new(x))
-    }
-
-    /// Generate a new function
-    pub fn function(body: Executable) -> Value {
-        Value::Function(body)
+        Value {
+            data: ValueData::Polymorphic(Arc::new(x))
+        }
     }
 
     /// Build a new list value
     pub fn list<I: IntoIterator<Item=Value>>(i: I) -> Value {
-        Value::List(i.into_iter().collect())
+        Value {
+            data: ValueData::List(i.into_iter().collect())
+        }
     }
 
     /// Build a string value
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
-        Value::Str(s.borrow().to_owned())
+        Value {
+            data: ValueData::Str(s.borrow().to_owned())
+        }
     }
 
     /// Perform macro expansion on the contained form
     pub fn macroexpand(self) -> EvalResult {
-        match self.get_basic()? {
-            Some(&Value::List(ref xs)) => {
+        match self.data {
+            ValueData::List(ref xs) => {
                 let macro_expr: Option<Value> =
                     if let Some(f) = xs.first() {
                         f.get_symbol()?
@@ -212,11 +216,10 @@ impl Value {
                     } else { None };
                 let macro_expr =
                     if let Some(m) = macro_expr {
-                        m.get_basic()?
-                         .and_then(|val| match val {
-                             &Value::Macro(ref exec) => Some(exec.clone()),
-                             _ => None
-                         })
+                        match m.data {
+                            ValueData::Macro(ref exec) => Some(exec.clone()),
+                            _ => None
+                        }
                     } else { None };
 
                 // check the first element to see if we can resolve it
@@ -236,26 +239,40 @@ impl Value {
     }
 }
 
-impl ValueLike for Value {
-    fn get_basic(&self) -> Eval<Option<&Value>> { Ok(Some(self)) }
+impl From<Executable> for Value {
+    fn from(e: Executable) -> Value { Value { data: ValueData::Function(e)} }
+}
 
+impl From<Number> for Value {
+    fn from(n: Number) -> Value { Value { data: ValueData::Number(n)} }
+}
+
+impl From<Identifier> for Value {
+    fn from(i: Identifier) -> Value { Value { data: ValueData::Symbol(i)} }
+}
+
+impl From<bool> for Value {
+    fn from(x: bool) -> Value { Value { data: ValueData::Boolean(x)} }
+}
+
+impl ValueLike for Value {
     fn get_symbol(&self) -> Eval<Option<Identifier>> {
-        if let &Value::Symbol(ref id) = self { Ok(Some(id.to_owned())) }
-        else if let &Value::Polymorphic(ref p) = self { p.get_symbol() }
+        if let ValueData::Symbol(ref id) = self.data { Ok(Some(id.to_owned())) }
+        else if let ValueData::Polymorphic(ref p) = self.data { p.get_symbol() }
         else { Ok(None) }
     }
 
     fn get_string(&self) -> Eval<Option<String>> {
-        if let &Value::Symbol(ref id) = self { Ok(Some((&*id.0).to_owned())) }
-        else if let &Value::Str(ref s) = self { Ok(Some(s.to_owned())) }
-        else if let &Value::Polymorphic(ref p) = self { p.get_string() }
+        if let &ValueData::Symbol(ref id) = &self.data { Ok(Some((&*id.0).to_owned())) }
+        else if let &ValueData::Str(ref s) = &self.data { Ok(Some(s.to_owned())) }
+        else if let &ValueData::Polymorphic(ref p) = &self.data { p.get_string() }
         else { Ok(None) }
     }
 
     fn into_seq(&self) -> Eval<Vec<Value>> {
-        if let &Value::List(ref l) = self {
+        if let &ValueData::List(ref l) = &self.data {
             Ok(l.to_owned())
-        } else if let &Value::Polymorphic(ref p) = self {
+        } else if let &ValueData::Polymorphic(ref p) = &self.data {
             p.into_seq()
         } else {
             Ok(vec![self.to_owned()])
@@ -263,24 +280,24 @@ impl ValueLike for Value {
     }
 
     fn into_iter(&self) -> ValueIteratorBox {
-        if let &Value::List(ref l) = self {
+        if let &ValueData::List(ref l) = &self.data {
             Box::new(l.to_owned().into_iter().map(Ok))
-        } else if let &Value::Polymorphic(ref p) = self {
+        } else if let &ValueData::Polymorphic(ref p) = &self.data {
             p.into_iter()
         } else {
-            let itm: Value = self.to_owned();
+            let itm = self.to_owned();
             Box::new(vec![itm].into_iter().map(Ok))
         }
     }
 
     fn into_str(&self) -> Eval<String> {
-        match self {
-            &Value::Boolean(true)       => Ok(String::from("true")),
-            &Value::Boolean(false)      => Ok(String::from("false")),
-            &Value::Number(ref n)       => Ok(format!("{}", n)),
-            &Value::Str(ref s)          => Ok(s.to_owned()),
-            &Value::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
-            &Value::List(ref l)         => {
+        match &self.data {
+            &ValueData::Boolean(true)       => Ok(String::from("true")),
+            &ValueData::Boolean(false)      => Ok(String::from("false")),
+            &ValueData::Number(ref n)       => Ok(format!("{}", n)),
+            &ValueData::Str(ref s)          => Ok(s.to_owned()),
+            &ValueData::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
+            &ValueData::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
                 let xs: Vec<_> = l.into_iter()
@@ -290,16 +307,16 @@ impl ValueLike for Value {
                 s.push(')');
                 Ok(s)
             },
-            &Value::Function(_)         => Ok(String::from("<function>")),
-            &Value::Macro(_)            => Ok(String::from("<macro>")),
-            &Value::Polymorphic(ref v)  => v.into_str()
+            &ValueData::Function(_)         => Ok(String::from("<function>")),
+            &ValueData::Macro(_)            => Ok(String::from("<macro>")),
+            &ValueData::Polymorphic(ref v)  => v.into_str()
         }
     }
 
     fn into_num(&self) -> Eval<Option<Number>> {
-        if let &Value::Number(ref n) = self {
+        if let &ValueData::Number(ref n) = &self.data {
             Ok(Some(n.to_owned()))
-        } else if let &Value::Polymorphic(ref p) = self {
+        } else if let &ValueData::Polymorphic(ref p) = &self.data {
             p.into_num()
         } else {
             Ok(None)
@@ -307,26 +324,26 @@ impl ValueLike for Value {
     }
 
     fn into_bool(&self) -> Eval<bool> {
-        match self {
-            &Value::Boolean(b)          => Ok(b),
-            &Value::Number(ref n)       => Ok(n.round() != 0),
-            &Value::Str(ref s)          => Ok(!s.is_empty()),
-            &Value::Symbol(ref id)      => Ok(true),
-            &Value::List(ref l) => Ok(
+        match &self.data {
+            &ValueData::Boolean(b)          => Ok(b),
+            &ValueData::Number(ref n)       => Ok(n.round() != 0),
+            &ValueData::Str(ref s)          => Ok(!s.is_empty()),
+            &ValueData::Symbol(ref id)      => Ok(true),
+            &ValueData::List(ref l) => Ok(
                 if l.is_empty() { false }
                 else { l.iter().map(|x| x.into_bool())
                                          .collect::<Eval<Vec<bool>>>()?
                                          .into_iter()
                                          .any(|x| x) }),
-            &Value::Function(_)         => Ok(true),
-            &Value::Macro(_)            => Ok(true),
-            &Value::Polymorphic(ref v)  => v.into_bool()
+            &ValueData::Function(_)         => Ok(true),
+            &ValueData::Macro(_)            => Ok(true),
+            &ValueData::Polymorphic(ref v)  => v.into_bool()
         }
     }
 
     fn into_args(&self) -> Eval<Vec<String>> {
-        match self {
-            &Value::List(ref l) => l.into_iter()
+        match &self.data {
+            &ValueData::List(ref l) => l.into_iter()
                                          .map(|x| x.into_args())
                                          .collect::<Eval<Vec<_>>>()
                                          .map(|r| r.into_iter()
@@ -337,8 +354,8 @@ impl ValueLike for Value {
     }
 
     fn evaluate(&self, env: &Environment) -> EvalResult {
-        match self {
-            &Value::Symbol(ref s) => {
+        match &self.data {
+            &ValueData::Symbol(ref s) => {
                 // try looking it up
                 if let Some(v) = env.get(&*(s.0)) {
                     Ok(v)
@@ -346,7 +363,7 @@ impl ValueLike for Value {
                     Ok(self.clone())
                 }
             },
-            &Value::List(ref xs) => {
+            &ValueData::List(ref xs) => {
                 // evaluate () as ()
                 if xs.is_empty() { return Ok(Value::list(vec![])); }
                 let first = xs[0].evaluate(env)?;
@@ -361,45 +378,45 @@ impl ValueLike for Value {
                     Ok(Value::list(xs))
                 }
             },
-            &Value::Macro(_)   => panic!("illegal attempt to evaluate macro"),
-            r => Ok(r.to_owned())
+            &ValueData::Macro(_)   => panic!("illegal attempt to evaluate macro"),
+            r => Ok(self.to_owned())
         }
     }
 
     fn is_executable(&self) -> bool {
-        match self {
-            &Value::Boolean(_)         => false,
-            &Value::Number(_)          => false,
-            &Value::Str(_)             => false,
-            &Value::Symbol(_)          => false,
-            &Value::List(_)            => false,
-            &Value::Function(_)        => true,
-            &Value::Macro(_)           => false,
-            &Value::Polymorphic(ref v) => v.is_executable()
+        match &self.data {
+            &ValueData::Boolean(_)         => false,
+            &ValueData::Number(_)          => false,
+            &ValueData::Str(_)             => false,
+            &ValueData::Symbol(_)          => false,
+            &ValueData::List(_)            => false,
+            &ValueData::Function(_)        => true,
+            &ValueData::Macro(_)           => false,
+            &ValueData::Polymorphic(ref v) => v.is_executable()
         }
     }
 
     fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
-        match self {
+        match &self.data {
             // TODO: force evaluate args in outer environment
             // delegate to inner evaluation function
-            &Value::Function(ref f) => f.run(env, args),
-            &Value::Macro(_)        => panic!("illegal attempt to execute macro"),
-            &Value::Polymorphic(ref v) => v.execute(env, args),
+            &ValueData::Function(ref f) => f.run(env, args),
+            &ValueData::Macro(_)        => panic!("illegal attempt to execute macro"),
+            &ValueData::Polymorphic(ref v) => v.execute(env, args),
             x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
         }
     }
 
     fn first(&self) -> Eval<Option<&ValueLike>> {
-        match self {
-            &Value::Boolean(_)         => Ok(Some(self)),
-            &Value::Number(_)          => Ok(Some(self)),
-            &Value::Str(_)             => Ok(Some(self)),
-            &Value::Symbol(_)          => Ok(Some(self)),
-            &Value::List(ref v)        => Ok(v.first().map(|x| -> &ValueLike {&*x})),
-            &Value::Function(_)        => Ok(Some(self)),
-            &Value::Macro(_)           => Ok(Some(self)),
-            &Value::Polymorphic(ref v) => v.first()
+        match &self.data {
+            &ValueData::Boolean(_)         => Ok(Some(self)),
+            &ValueData::Number(_)          => Ok(Some(self)),
+            &ValueData::Str(_)             => Ok(Some(self)),
+            &ValueData::Symbol(_)          => Ok(Some(self)),
+            &ValueData::List(ref v)        => Ok(v.first().map(|x| -> &ValueLike {&*x})),
+            &ValueData::Function(_)        => Ok(Some(self)),
+            &ValueData::Macro(_)           => Ok(Some(self)),
+            &ValueData::Polymorphic(ref v) => v.first()
         }
     }
 }
@@ -409,14 +426,14 @@ impl PartialEq for Value {
         unimplemented!()
         /*
         match (self, other) {
-            (&Value::Boolean(x),     &Value::Boolean(y))    => x == y,
-            (&Value::Number(ref x),  &Value::Number(ref y)) => x == y,
-            (&Value::Str(ref x),     &Value::Str(ref y))    => x == y,
-            (&Value::Symbol(ref x),  &Value::Symbol(ref y)) => x == y,
-            (&Value::List(ref x),    &Value::List(ref y))   => x == y,
+            (&ValueData::Boolean(x),     &Value::Boolean(y))    => x == y,
+            (&ValueData::Number(ref x),  &Value::Number(ref y)) => x == y,
+            (&ValueData::Str(ref x),     &Value::Str(ref y))    => x == y,
+            (&ValueData::Symbol(ref x),  &Value::Symbol(ref y)) => x == y,
+            (&ValueData::List(ref x),    &Value::List(ref y))   => x == y,
 
             // don't bother comparing functions or wrappers yet
-            (&Value::Function(_)  ,&Value::Function(_,_))   => false,
+            (&ValueData::Function(_)  ,&Value::Function(_,_))   => false,
             _                                               => false
         }
         */
@@ -508,17 +525,17 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
     }
 }
 
-impl fmt::Debug for Value {
+impl fmt::Debug for ValueData {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            &Value::Boolean(b)    => write!(f, "<bool:{}>", b),
-            &Value::Number(ref n) => write!(f, "<num:{}>", n),
-            &Value::Str(ref s)    => write!(f, "<str:\"{}\">", s),
-            &Value::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
-            &Value::List(ref v)   => write!(f, "{:?}", v),
-            &Value::Function(_)   => write!(f, "<function>"),
-            &Value::Macro(_)      => write!(f, "<macro>"),
-            &Value::Polymorphic(ref v) => write!(f, "<polymorphic>"),
+            &ValueData::Boolean(b)    => write!(f, "<bool:{}>", b),
+            &ValueData::Number(ref n) => write!(f, "<num:{}>", n),
+            &ValueData::Str(ref s)    => write!(f, "<str:\"{}\">", s),
+            &ValueData::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
+            &ValueData::List(ref v)   => write!(f, "{:?}", v),
+            &ValueData::Function(_)   => write!(f, "<function>"),
+            &ValueData::Macro(_)      => write!(f, "<macro>"),
+            &ValueData::Polymorphic(ref v) => write!(f, "<polymorphic>"),
         }
     }
 }

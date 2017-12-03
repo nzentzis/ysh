@@ -31,7 +31,7 @@ named!(pub numeric_value<Value>,
                map!(real, Number::real) |
                map!(integer, Number::int)
                ),
-            |x| Value::new(Value::Number(x)))
+            |x| Value::from(x))
        );
 
 #[cfg(test)]

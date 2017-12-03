@@ -58,7 +58,7 @@ fn locate_executable(env: &Environment, args: &[Value]) -> EvalResult {
 
     if args.len() == 0 {
         // allow use as a transformer
-        return Ok(Value::function(Executable::native(locate_executable)));
+        return Ok(Value::from(Executable::native(locate_executable)));
     }
 
     let paths = if let Some(p) = env.get("path") { p }
@@ -88,13 +88,13 @@ fn init_environment() {
     library::initialize();
 
     let env = global();
-    env.set("print", Value::function(Executable::native(|_, args| {
+    env.set("print", Value::from(Executable::native(|_, args| {
             //println!("{:?}", args);
             println!("value!");
             Ok(Value::empty())
         })));
 
-    env.set("print-lines", Value::function(Executable::native(|_, args| {
+    env.set("print-lines", Value::from(Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
                     println!("{}", i?.into_str()?);
@@ -103,24 +103,24 @@ fn init_environment() {
             Ok(Value::empty())
         })));
 
-    env.set("dbg", Value::function(Executable::native(|_, args| {
+    env.set("dbg", Value::from(Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
-                    println!("{:?}", i?.get_basic()?);
+                    println!("{:?}", i?);
                 }
             }
             Ok(Value::empty())
         })));
 
-    env.set("shell/locate", Value::function(
+    env.set("shell/locate", Value::from(
         Executable::native(locate_executable)));
 
-    env.set("try-read", Value::function(
+    env.set("try-read", Value::from(
         Executable::native(|_,_| reader::read(&mut ::std::io::stdin())
                                 .map_err(ParseError::to_eval)
                            )));
 
-    env.set("try-read-pl", Value::function(
+    env.set("try-read-pl", Value::from(
         Executable::native(|_,_| reader::read_pipeline(&mut ::std::io::stdin())
                                 .and_then(|x| {
                                     println!("{:?}", x);
@@ -129,13 +129,13 @@ fn init_environment() {
                                 .map_err(ParseError::to_eval)
                            )));
 
-    env.set("exit", Value::function(Executable::native(|_,_| {
+    env.set("exit", Value::from(Executable::native(|_,_| {
             RUN_SHELL.store(false, Ordering::Relaxed);
             Ok(Value::empty()) })));
 
     // recovery function to restore the system environment in case something got
     // seriously borked
-    env.set_immut("sys/recover", Value::function(Executable::native(|_,_| {
+    env.set_immut("sys/recover", Value::from(Executable::native(|_,_| {
             init_environment();
             Ok(Value::empty()) })));
 
