@@ -20,6 +20,7 @@ lazy_static! {
 enum ParseStackElement {
     List(Vec<Value>),
     Quote,
+    Lambda,
 }
 
 #[derive(Debug)]
@@ -431,6 +432,10 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
 
+    // maintain state for lambda shorthand
+    let mut in_lambda = false;
+    let mut lambda_args: i32 = 0; // -1 for a single $, 0 for unset, >0 for $N form
+
     loop {
         // read a character
         let c = loop {
@@ -506,6 +511,54 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                 stack.push(ParseStackElement::Quote);
                 peek.next()?;
                 continue;
+            } else if c == '$' {
+                peek.next()?;
+                let c = peek.peek().map(Some)
+                            .or_else(|e|
+                                 if e.kind() == io::ErrorKind::UnexpectedEof {
+                                     Ok(None)
+                                 } else {Err(e)})?;
+                if let Some(c) = c {
+                    if c == '(' {
+                        if in_lambda {
+                            return Err(ParseError::Syntax(
+                                "lambda functions cannot be nested"));
+                        }
+                        in_lambda = true;
+                        lambda_args = 0;
+                        stack.push(ParseStackElement::Lambda);
+                        stack.push(ParseStackElement::List(Vec::new()));
+                        peek.next()?;
+                        continue;
+                    }
+                }
+                peek.push('$');
+
+                let id = read_identifier(peek)?;
+                if id.as_ref() == "$" {
+                    if in_lambda {
+                        if lambda_args > 1 {
+                            return Err(ParseError::Syntax(
+                                    "mixing $ and $N forms is not allowed"));
+                        }
+                        lambda_args = -1;
+                    }
+                } else if id.as_ref().len() == 2 &&
+                          id.as_ref().chars().next() == Some('$') {
+                    let c = id.as_ref().chars().skip(1).next().unwrap();
+                    if c.is_digit(10) && in_lambda {
+                        if lambda_args < 0 {
+                            return Err(ParseError::Syntax(
+                                    "mixing $ and $N forms is not allowed"));
+                        }
+                        let n = c.to_digit(10).unwrap() as i32;
+                        if n > lambda_args {
+                            lambda_args = n;
+                        }
+                    }
+                }
+
+                Value::from(id)
             } else if c == '+' || c == '-' || (c >= '0' && c <= '9') || c == '.' {
                 // try to read a numeric constant
                 let r = read_number(peek);
@@ -557,6 +610,29 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                     res = Value::list(vec![
                         Value::from(Identifier::new("quote")),
                         res]);
+                },
+                Some(&mut ParseStackElement::Lambda) => {
+                    // construct an appropriate lambda function
+                    let args = {
+                        if lambda_args == -1 {
+                            vec![Value::from(Identifier::new("$"))]
+                        } else {
+                            (0..lambda_args).into_iter()
+                                            .map(|x| format!("${}", x+1))
+                                            .map(Identifier::new)
+                                            .map(Value::from)
+                                            .collect::<Vec<_>>()
+                        }
+                    };
+                    res = Value::list(vec![
+                        Value::from(Identifier::new("fn")),
+                        Value::list(args),
+                        res
+                    ]);
+                    
+                    // reset state
+                    in_lambda = false;
+                    lambda_args = 0;
                 },
                 None => return Ok((res))
             }
