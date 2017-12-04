@@ -462,20 +462,17 @@ impl ValueLike for Value {
 
 impl PartialEq for Value {
     fn eq(&self, other: &Value) -> bool {
-        unimplemented!()
-        /*
-        match (self, other) {
-            (&ValueData::Boolean(x),     &Value::Boolean(y))    => x == y,
-            (&ValueData::Number(ref x),  &Value::Number(ref y)) => x == y,
-            (&ValueData::Str(ref x),     &Value::Str(ref y))    => x == y,
-            (&ValueData::Symbol(ref x),  &Value::Symbol(ref y)) => x == y,
-            (&ValueData::List(ref x),    &Value::List(ref y))   => x == y,
+        match (&self.data, &other.data) {
+            (&ValueData::Boolean(x),     &ValueData::Boolean(y))    => x == y,
+            (&ValueData::Number(ref x),  &ValueData::Number(ref y)) => x == y,
+            (&ValueData::Str(ref x),     &ValueData::Str(ref y))    => x == y,
+            (&ValueData::Symbol(ref x),  &ValueData::Symbol(ref y)) => x == y,
+            (&ValueData::List(ref x),    &ValueData::List(ref y))   => x == y,
 
             // don't bother comparing functions or wrappers yet
-            (&ValueData::Function(_)  ,&Value::Function(_,_))   => false,
-            _                                               => false
+            (&ValueData::Function(_),    &ValueData::Function(_))   => false,
+            _                                                       => false
         }
-        */
     }
 }
 

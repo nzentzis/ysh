@@ -63,10 +63,35 @@ fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
     else { Ok(Value::list(rs)) }
 }
 
+/// Compare two things for equality
+/// 
+/// With 1 arg: produce function which compares to the arg
+/// With 2 args: compare arguments
+fn fn_equal(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 {
+        let tgt = args[0].clone();
+        Ok(Value::from(Executable::native(move |_,args| {
+            if args.len() != 1 {
+                Err(EvalError::Arity {got: args.len(), expected: 1})
+            } else {
+                Ok(Value::from(tgt == args[0]))
+            }
+        })))
+    } else if args.len() == 2 {
+        Ok(Value::from(args[0] == args[1]))
+    } else {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 2
+        })
+    }
+}
+
 pub fn initialize() {
     let env = global();
     env.set("+", Value::from(Executable::native(fn_add)));
     env.set("-", Value::from(Executable::native(fn_sub)));
+    env.set("=", Value::from(Executable::native(fn_equal)));
 
     env.set("inc", Value::from(Executable::native(fn_inc)));
 }
