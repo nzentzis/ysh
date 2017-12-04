@@ -80,6 +80,30 @@ impl Number {
             &Number::Complex{a,..}  => a.round() as i64
         }
     }
+
+    /// Simplify the number to a lower form
+    /// 
+    /// This will only perform simplification if it can be done without losing
+    /// information.
+    pub fn simplify(self) -> Number {
+        match self {
+            Number::Integer(i) => Number::Integer(i),
+            Number::Rational{num,denom} => {
+                if num % denom == 0 { Number::Integer(num/denom) }
+                else {
+                    let g = gcd(num,denom);
+                    Number::Rational{num: num/g, denom: denom/g}
+                }
+            },
+            Number::Real(f) => if f.fract() == 0. {
+                Number::Integer(f.trunc() as i64)
+            } else {
+                Number::Real(f)
+            },
+            Number::Complex{a,b} => if b == 0. { Number::Real(a).simplify() }
+                                    else { Number::Complex{a,b} }
+        }
+    }
 }
 
 impl fmt::Debug for Number {
@@ -150,7 +174,7 @@ impl<A> ops::Add<A> for Number where A: Borrow<Number> {
             (Number::Complex{a,b}, Number::Complex{a:x,b:y}) =>
                 Number::Complex {a: a+x, b: b+y},
             _ => panic!("failed to cast numeric values")
-        }
+        }.simplify()
     }
 }
 
@@ -208,7 +232,7 @@ impl<A> ops::Sub<A> for Number where A: Borrow<Number> {
             (Number::Complex{a,b}, Number::Complex{a:x,b:y}) =>
                 Number::Complex {a: a-x, b: b-y},
             _ => panic!("failed to cast numeric values")
-        }
+        }.simplify()
     }
 }
 
@@ -250,5 +274,72 @@ impl ops::Neg for Number {
             Number::Real(x) => Number::Real(-x),
             Number::Complex{a,b} => Number::Complex{a:-a,b:-b}
         }
+    }
+}
+
+impl<A> ops::Mul<A> for Number where A: Borrow<Number> {
+    type Output = Number;
+
+    fn mul(self, rhs: A) -> Number {
+        let rhs = rhs.borrow();
+        let a = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&a);
+
+        match (a, rhs) {
+            (Number::Integer(a), Number::Integer(b)) => Number::Integer(a*b),
+            (Number::Rational{num:a,denom:b}, Number::Rational{num:c,denom:d})=>
+                Number::Rational {num: a*c, denom: b*d},
+            (Number::Real(a), Number::Real(b)) => Number::Real(a*b),
+            (Number::Complex{a,b}, Number::Complex{a:c,b:d}) =>
+                Number::Complex{a:a*c - b*d, b:a*d + c*b},
+            _ => panic!("failed to cast numeric values")
+        }.simplify()
+    }
+}
+
+impl<A> ops::MulAssign<A> for Number where A: Borrow<Number> {
+    fn mul_assign(&mut self, rhs: A) {
+        let rhs = rhs.borrow();
+        *self = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&self);
+
+        match (self, rhs) {
+            (&mut Number::Integer(ref mut a), Number::Integer(b)) => {*a *= b},
+            (&mut Number::Rational{num:ref mut a,denom:ref mut b},
+                  Number::Rational{num:c,denom:d})=> {
+                *a *= c;
+                *b *= d;
+            },
+            (&mut Number::Real(ref mut a), Number::Real(b)) => {*a *= b},
+            (&mut Number::Complex{ref mut a,ref mut b},
+                  Number::Complex{a:c,b:d}) => {
+                let n_a = (*a)*c - (*b)*d;
+                let n_b = (*a)*d + c*(*b);
+                *a = n_a;
+                *b = n_b;
+            },
+            _ => panic!("failed to cast numeric values")
+        }
+    }
+}
+
+impl<A> ops::Div<A> for Number where A: Borrow<Number> {
+    type Output = Number;
+
+    fn div(self, rhs: A) -> Number {
+        let rhs = rhs.borrow();
+        let a = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&a);
+
+        match (a, rhs) {
+            (Number::Integer(a), Number::Integer(b)) =>
+                Number::Rational {num: a, denom: b},
+            (Number::Rational{num:a,denom:b}, Number::Rational{num:c,denom:d})=>
+                Number::Rational {num: a*d, denom: b*c},
+            (Number::Real(a), Number::Real(b)) => Number::Real(a/b),
+            //(Number::Complex{a,b}, Number::Complex{a:c,b:d}) =>
+            //    unimplemented!("complex division not yet implemented"),
+            _ => panic!("failed to cast numeric values")
+        }.simplify()
     }
 }

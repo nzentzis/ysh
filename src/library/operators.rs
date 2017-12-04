@@ -13,7 +13,21 @@ fn fn_add(_: &Environment, args: &[Value]) -> EvalResult {
         }
     }
 
-    Ok(Value::from(ns.into_iter().fold(Number::int(0), |a,b| a+b)))
+    Ok(Value::from(ns.into_iter().fold(Number::int(0), |a,b| a+b).simplify()))
+}
+
+fn fn_mul(_: &Environment, args: &[Value]) -> EvalResult {
+    // require that all args are numbers
+    let mut ns = Vec::new();
+    for i in args.iter() {
+        match i.into_num()? {
+            Some(n) => ns.push(n),
+            _ => return Err(EvalError::TypeError(
+                    String::from("non-numeric multiply not yet implemented")))
+        }
+    }
+
+    Ok(Value::from(ns.into_iter().fold(Number::int(1), |a,b| a*b).simplify()))
 }
 
 /// If used with one arg, negate it
@@ -26,23 +40,44 @@ fn fn_sub(_: &Environment, args: &[Value]) -> EvalResult {
         })
     } else if args.len() == 1 {
         let n = if let Some(n) = args[0].into_num()? { n }
-                else { return Err(EvalError::TypeError(String::from("cannot negate non-numeric type"))) };
+                else { return Err(EvalError::TypeError(
+                            String::from("cannot negate non-numeric type"))) };
         Ok(Value::from(-n))
     } else {
         let mut n =
             if let Some(n) = args[0].into_num()? { n }
             else { return Err(EvalError::TypeError(
-                        String::from("cannot subtract from non-numeric type"))) };
+                        String::from("cannot subtract from non-numeric type")))};
 
         for i in args[1..].iter() {
             if let Some(x) = i.into_num()? {
                 n -= x;
             } else {
-                return Err(EvalError::TypeError(String::from("cannot subtract non-numeric type")))
+                return Err(EvalError::TypeError(
+                        String::from("cannot subtract non-numeric type")))
             }
         }
 
-        Ok(Value::from(n))
+        Ok(Value::from(n.simplify()))
+    }
+}
+
+/// Divide the first argument by the second
+fn fn_div(_: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() != 2 {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 2
+        })
+    } else {
+        let m = if let Some(n) = args[0].into_num()? { n }
+                else { return Err(EvalError::TypeError(
+                        String::from("cannot divide non-numeric type")))};
+        let n = if let Some(n) = args[1].into_num()? { n }
+                else { return Err(EvalError::TypeError(
+                        String::from("cannot divide non-numeric type")))};
+
+        Ok(Value::from((m/n).simplify()))
     }
 }
 
@@ -59,6 +94,7 @@ fn fn_inc(_: &Environment, args: &[Value]) -> EvalResult {
     }
 
     let rs: Vec<_> = rs.into_iter()
+                       .map(|x| x.simplify())
                        .map(Value::from)
                        .collect();
     if rs.len() == 1 { Ok(rs.into_iter().next().unwrap()) }
@@ -93,6 +129,9 @@ pub fn initialize() {
     let env = global();
     env.set("+", Value::from(Executable::native(fn_add)));
     env.set("-", Value::from(Executable::native(fn_sub)));
+    env.set("*", Value::from(Executable::native(fn_mul)));
+    env.set("/", Value::from(Executable::native(fn_div)));
+
     env.set("=", Value::from(Executable::native(fn_equal)));
 
     env.set("inc", Value::from(Executable::native(fn_inc)));
