@@ -2,13 +2,14 @@ use environment::*;
 use numeric::*;
 use data::*;
 
-fn fn_add(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_add(_: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut ns = Vec::new();
     for i in args.iter() {
         match i.into_num()? {
             Some(n) => ns.push(n),
-            r => return Err(EvalError::TypeError(String::from("non-numeric adds not yet implemented")))
+            _ => return Err(EvalError::TypeError(
+                    String::from("non-numeric adds not yet implemented")))
         }
     }
 
@@ -17,7 +18,7 @@ fn fn_add(env: &Environment, args: &[Value]) -> EvalResult {
 
 /// If used with one arg, negate it
 /// If more than one, subtract the second and on from the first
-fn fn_sub(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_sub(_: &Environment, args: &[Value]) -> EvalResult {
     if args.is_empty() {
         Err(EvalError::Arity {
             got: 0,
@@ -45,14 +46,15 @@ fn fn_sub(env: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
-fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_inc(_: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut rs = Vec::new();
     let one = Number::int(1);
     for i in args.iter() {
         match i.into_num()? {
             Some(n) => rs.push(n + &one),
-            r => return Err(EvalError::TypeError(String::from("non-numeric adds not yet implemented")))
+            _ => return Err(EvalError::TypeError(
+                    String::from("non-numeric adds not yet implemented")))
         }
     }
 
@@ -67,7 +69,7 @@ fn fn_inc(env: &Environment, args: &[Value]) -> EvalResult {
 /// 
 /// With 1 arg: produce function which compares to the arg
 /// With 2 args: compare arguments
-fn fn_equal(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_equal(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let tgt = args[0].clone();
         Ok(Value::from(Executable::native(move |_,args| {

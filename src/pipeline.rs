@@ -1,14 +1,12 @@
 use std::io;
 use std::path::PathBuf;
 use std::os::unix::prelude::*;
-use std::process;
 use std::error::Error;
 
 use nix::fcntl;
 use nix::unistd;
 
 use data::*;
-use globals::job_control;
 use evaluate::find_command;
 use environment::{global, empty};
 use jobs::{Command, Job, IoChannel};
@@ -278,10 +276,10 @@ impl Plan {
     fn get_input_fd(&self) -> RawFd {
         match &self.0[0] {
             &PlanElement::Stdin          => io::stdin().as_raw_fd(),
-            &PlanElement::FromFile(ref fname)=> {
+            &PlanElement::FromFile(ref _fname)=> {
                 unimplemented!("file inputs not yet ready")
             },
-            &PlanElement::FromVar(ref id)    => {
+            &PlanElement::FromVar(ref _id)    => {
                 unimplemented!("variable inputs not yet ready")
             },
             _ => panic!("plan has invalid beginning element")
@@ -389,10 +387,10 @@ impl Plan {
             // figure out what output to use
             let out = match last_elem {
                 PlanElement::Stdout         => EvalOutput::PrettyStdout,
-                PlanElement::AppendFile(f)  => unimplemented!(),
-                PlanElement::AppendVar(id)  => unimplemented!(),
-                PlanElement::ToFile(f)      => unimplemented!(),
-                PlanElement::IntoVar(id)    => unimplemented!(),
+                PlanElement::AppendFile(_f)  => unimplemented!(),
+                PlanElement::AppendVar(_id)  => unimplemented!(),
+                PlanElement::ToFile(_f)      => unimplemented!(),
+                PlanElement::IntoVar(_id)    => unimplemented!(),
                 _                           => panic!("invalid plan terminator")
             };
 

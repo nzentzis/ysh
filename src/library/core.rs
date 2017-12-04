@@ -272,7 +272,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
 /// 
 /// With one argument, return its quoted form. Otherwise, wrap its args in a
 /// list.
-fn core_quote(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_quote(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         Ok(args[0].to_owned())
     } else {

@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 use nix::unistd;
 use nix::sys::signal;
 
-use environment::{Environment, global, empty};
+use environment::{Environment, global};
 use pipeline::{Plan, PlanningError};
 use data::{Value, ValueLike, Executable, EvalResult, Eval};
 use reader::ParseError;
@@ -88,7 +88,7 @@ fn init_environment() {
     library::initialize();
 
     let env = global();
-    env.set("print", Value::from(Executable::native(|_, args| {
+    env.set("print", Value::from(Executable::native(|_, _| {
             //println!("{:?}", args);
             println!("value!");
             Ok(Value::empty())

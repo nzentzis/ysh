@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io;
 
-use nom::*;
-
 use termion::*;
 use termion::raw::IntoRawMode;
 use termion::input::TermRead;

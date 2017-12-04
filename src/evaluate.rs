@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use data::*;
-use environment::{Environment, run_fn};
+use environment::run_fn;
 
 /// Try to find a command using values from the active environment
 pub fn find_command(cmd: &str) -> Option<Vec<PathBuf>> {

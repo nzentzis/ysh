@@ -77,7 +77,7 @@ impl Number {
             &Number::Integer(i)     => i,
             &Number::Rational{num,denom} => num/denom,
             &Number::Real(f)        => f.round() as i64,
-            &Number::Complex{a, b}  => a.round() as i64
+            &Number::Complex{a,..}  => a.round() as i64
         }
     }
 }
@@ -109,7 +109,6 @@ fn gcd(a: i64, b: i64) -> i64 {
     let (mut k1, mut k2) = if a < b { (b, a) } else { (a, b) };
 
     loop {
-        let q = k2 / k1;
         let r = k2 % k1;
 
         if r == 0 { break k1 }
@@ -130,7 +129,7 @@ impl<A> ops::Add<A> for Number where A: Borrow<Number> {
 
     fn add(self, rhs: A) -> Number {
         let rhs = rhs.borrow();
-        let mut a = self.cast_to_match(rhs);
+        let a = self.cast_to_match(rhs);
         let rhs = rhs.cast_to_match(&a);
 
         match (a,rhs) {
@@ -188,7 +187,7 @@ impl<A> ops::Sub<A> for Number where A: Borrow<Number> {
 
     fn sub(self, rhs: A) -> Number {
         let rhs = rhs.borrow();
-        let mut a = self.cast_to_match(rhs);
+        let a = self.cast_to_match(rhs);
         let rhs = rhs.cast_to_match(&a);
 
         match (a,rhs) {

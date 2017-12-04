@@ -1,7 +1,5 @@
 use std::io;
-use std::io::prelude::*;
 use std::os::unix::prelude::*;
-use std::sync::Arc;
 use std::boxed::Box;
 
 use span::*;
@@ -121,7 +119,7 @@ impl PolyStream {
     /// 
     /// It's not suitable for pulling data from stdin.
     pub fn from_fd(fd: RawFd, opts: StreamOptions) -> io::Result<Self> {
-        let mut strm = LazyReadStream::new(fd)?;
+        let strm = LazyReadStream::new(fd)?;
         Ok(PolyStream {
             inner: InnerStream {
                 opts, front: None,
@@ -132,7 +130,7 @@ impl PolyStream {
 
     /// Open a stream from stdin
     pub fn from_stdin(opts: StreamOptions) -> io::Result<Self> {
-        let mut strm = LazyReadStream::stdin()?;
+        let strm = LazyReadStream::stdin()?;
         Ok(PolyStream {
             inner: InnerStream {
                 opts, front: None,
@@ -164,7 +162,7 @@ impl ValueLike for PolyStream {
         Box::new(LineIterator { stream: self.inner.clone() })
     }
 
-    fn evaluate(&self, env: &::environment::Environment) -> EvalResult {
+    fn evaluate(&self, _env: &::environment::Environment) -> EvalResult {
         Ok(Value::new(PolyStream { inner: self.inner.clone() }))
     }
 
@@ -207,7 +205,6 @@ impl PolyLine {
         if sep == ' ' {
             let mut state = FieldSplitState::Start;
             let mut start_idx = 0;
-            let mut end_idx = 0;
             let mut lspace = 0;
             let mut rspace = 0;
             let mut length = 0;
@@ -247,12 +244,11 @@ impl PolyLine {
                     FieldSplitState::CheckSep => {
                         if c != ' ' {
                             // end field
-                            end_idx = i-1;
                             field_regions.push((start_idx,
                                                 lspace,
                                                 length,
                                                 rspace,
-                                                end_idx));
+                                                i-1));
                             start_idx = i;
                             lspace = 0; rspace = 0; length = 1;
                             state = FieldSplitState::ReadData;
@@ -261,12 +257,11 @@ impl PolyLine {
                             // biasing toward right alignment then we have to
                             // consume spaces
                             if bias {
-                                end_idx = i;
                                 field_regions.push((start_idx,
                                                     lspace,
                                                     length,
                                                     rspace,
-                                                    end_idx));
+                                                    i));
                                 start_idx = i;
                                 lspace = 0; rspace = 0; length = 0;
                                 state = FieldSplitState::LeftBlanks;
@@ -300,7 +295,7 @@ impl PolyLine {
         } else {
             let mut state = FieldSplitState::LeftBlanks;
             let mut start_idx = 0;
-            let mut end_idx = 0;
+            let mut end_idx;
             let mut lspace = 0;
             let mut rspace = 0;
             let mut length = 0;
@@ -346,7 +341,7 @@ impl PolyLine {
                             continue;
                         } else {
                             // more body data - go back and adjust
-                            length += (rspace + 1);
+                            length += rspace + 1;
                             rspace = 0;
                             state = FieldSplitState::ReadData;
                             continue;
@@ -369,7 +364,7 @@ impl PolyLine {
         }
 
         let fields: Vec<_> = field_regions.into_iter()
-            .map(|(start,l,len,r,end)| {
+            .map(|(start,l,_len,r,end)| {
                 let data =
                     if (end-r) > span.real_len() { span.subspan(start+l..) }
                     else { span.subspan(start+l..end-r) };
@@ -399,7 +394,7 @@ impl ValueLike for PolyLine {
         Box::new(self.fields.clone().into_iter().map(Value::new).map(Ok))
     }
 
-    fn evaluate(&self, env: &::environment::Environment) -> EvalResult {
+    fn evaluate(&self, _env: &::environment::Environment) -> EvalResult {
         Ok(Value::new(self.clone()))
     }
 
@@ -449,7 +444,7 @@ impl ValueLike for PolyField {
         Box::new(Value::new(self.to_owned()).into_iter())
     }
 
-    fn evaluate(&self, env: &::environment::Environment) -> EvalResult {
+    fn evaluate(&self, _env: &::environment::Environment) -> EvalResult {
         Ok(Value::new(self.to_owned()))
     }
 

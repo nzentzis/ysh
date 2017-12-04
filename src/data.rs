@@ -1,7 +1,6 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::boxed::Box;
-use std::cell::RefCell;
 
 use environment::Environment;
 use numeric::*;
@@ -150,7 +149,7 @@ pub trait ValueLike : Send + Sync {
     /// 
     /// If the value is not executable, return Err() with the original
     /// arguments.
-    fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
+    fn execute(&self, _env: &Environment, _args: &[Value]) -> EvalResult {
         Err(EvalError::InvalidOperation("execution not supported"))
     }
 
@@ -367,7 +366,7 @@ impl ValueLike for Value {
             &ValueData::Boolean(b)          => Ok(b),
             &ValueData::Number(ref n)       => Ok(n.round() != 0),
             &ValueData::Str(ref s)          => Ok(!s.is_empty()),
-            &ValueData::Symbol(ref id)      => Ok(true),
+            &ValueData::Symbol(_)           => Ok(true),
             &ValueData::List(ref l) => Ok(
                 if l.is_empty() { false }
                 else { l.iter().map(|x| x.into_bool())
@@ -388,7 +387,7 @@ impl ValueLike for Value {
                                          .map(|r| r.into_iter()
                                                    .flat_map(|x| x)
                                                    .collect()),
-            other => self.into_str().map(|r| vec![r])
+            _ => self.into_str().map(|r| vec![r])
         }
     }
 
@@ -418,7 +417,7 @@ impl ValueLike for Value {
                 }
             },
             &ValueData::Polymorphic(ref p) => p.evaluate(env),
-            r => Ok(self.to_owned())
+            _ => Ok(self.to_owned())
         }
     }
 
@@ -593,14 +592,14 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
 impl fmt::Debug for ValueData {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            &ValueData::Boolean(b)    => write!(f, "<bool:{}>", b),
-            &ValueData::Number(ref n) => write!(f, "<num:{}>", n),
-            &ValueData::Str(ref s)    => write!(f, "<str:\"{}\">", s),
-            &ValueData::Symbol(ref s) => write!(f, "<sym:{}>", s.0),
-            &ValueData::List(ref v)   => write!(f, "{:?}", v),
-            &ValueData::Function(_)   => write!(f, "<function>"),
-            &ValueData::Macro(_)      => write!(f, "<macro>"),
-            &ValueData::Polymorphic(ref v) => write!(f, "<polymorphic>"),
+            &ValueData::Boolean(b)     => write!(f, "<bool:{}>", b),
+            &ValueData::Number(ref n)  => write!(f, "<num:{}>", n),
+            &ValueData::Str(ref s)     => write!(f, "<str:\"{}\">", s),
+            &ValueData::Symbol(ref s)  => write!(f, "<sym:{}>", s.0),
+            &ValueData::List(ref v)    => write!(f, "{:?}", v),
+            &ValueData::Function(_)    => write!(f, "<function>"),
+            &ValueData::Macro(_)       => write!(f, "<macro>"),
+            &ValueData::Polymorphic(_) => write!(f, "<polymorphic>"),
         }
     }
 }

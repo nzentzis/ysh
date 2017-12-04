@@ -180,7 +180,7 @@ fn fn_reduce(env: &Environment, args: &[Value]) -> EvalResult {
 /// Take the first element of an input sequence
 /// 
 /// If the input is empty, returns ()
-fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_first(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let itm = &args[0];
         match itm.into_iter().next() {
@@ -198,7 +198,7 @@ fn fn_first(env: &Environment, args: &[Value]) -> EvalResult {
 /// Remove the first element of an input sequence
 /// 
 /// If the input is empty, returns ()
-fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_rest(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let itm = &args[0];
         let res = itm.into_iter().skip(1).collect::<Eval<Vec<_>>>()?;
@@ -219,12 +219,12 @@ fn fn_rest(env: &Environment, args: &[Value]) -> EvalResult {
 ///                         which no element is available.
 /// 
 /// If the given element isn't there, return ()
-fn fn_nth(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_nth(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 { // build transformer
         let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
         Ok(Value::from(
-                Executable::native(move |env, args| {
+                Executable::native(move |_, args| {
                     let res = args.iter().filter_map(|v| v.into_iter()
                                          .nth(idx as usize))
                                          .collect::<Eval<Vec<_>>>()?;
@@ -270,7 +270,7 @@ impl Iterator for ConcatIterator {
 /// Get the length of an input's sequential form
 /// 
 /// If more than one argument is given, return a list of lengths.
-fn fn_length(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_length(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         Ok(Value::from(Number::int(args[0].into_seq()?.len() as i64)))
     } else if args.len() > 1 {
@@ -290,7 +290,7 @@ fn fn_length(env: &Environment, args: &[Value]) -> EvalResult {
 /// Check whether an input's sequential form is empty
 /// 
 /// If supplied with multiple arguments, returns whether all are empty.
-fn fn_empty_q(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_empty_q(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().all(|x| x.into_iter().next().is_none())))
 }
 
@@ -299,7 +299,7 @@ fn fn_empty_q(env: &Environment, args: &[Value]) -> EvalResult {
 ///     (concat xs ys zs) = ((nth 0 xs) (nth 1 ys) (nth 2 zs) ...
 ///                          (nth 0 xs) (nth 1 ys) (nth 2 zs) ...
 ///                          (nth 0 xs) (nth 1 ys) (nth 2 zs) ...)
-fn fn_concat(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_concat(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::new(LazySequence::new(ConcatIterator {
         inner: args.iter().map(|x| x.into_iter()).collect()
     })))
@@ -323,7 +323,7 @@ impl Iterator for ConsIterator {
 /// 
 /// All items after the first are added *in order* to the first element. For
 /// example, `(cons (1 2 3) 4 5 6)` would return `(4 5 6 1 2 3)`.
-fn fn_cons(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_cons(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() < 2 {
         Err(EvalError::Arity {
             got: args.len(),
@@ -357,7 +357,7 @@ impl Iterator for ConjIterator {
 }
 
 /// Add one or more items to the end of the provided sequence
-fn fn_conj(env: &Environment, args: &[Value]) -> EvalResult {
+fn fn_conj(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() < 2 {
         Err(EvalError::Arity {
             got: args.len(),

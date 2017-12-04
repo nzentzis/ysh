@@ -3,10 +3,9 @@ use std::io::prelude::*;
 use std::os::unix::prelude::*;
 
 use std::io::ErrorKind;
-use std::sync::{Arc, Weak, Mutex, RwLock};
-use std::cell::Cell;
+use std::sync::{Arc, Mutex};
 use std::cmp::Ordering;
-use std::ops::{Range, RangeFrom, RangeTo, RangeFull, Index};
+use std::ops::{Range, RangeFrom, RangeTo, RangeFull};
 
 use std::fs::File;
 
@@ -280,7 +279,7 @@ impl<'a> Iterator for Chars<'a> {
                         // replace the garbage and continue
                         let bad_suffix_len = self.ptr - e.valid_up_to();
                         let to_strip = len - bad_suffix_len;
-                        for i in 0..to_strip { self.bytes.next(); }
+                        for _ in 0..to_strip { self.bytes.next(); }
                         self.ptr = e.valid_up_to();
                         break Some('\u{FFFD}');
                     } else {
@@ -449,7 +448,7 @@ impl Span {
     /// 
     /// # Panics
     /// This will panic if the span cannot possibly contain the given range
-    pub fn try_slice(&self, range: Range<usize>) -> Option<&[u8]> {
+    pub fn try_slice(&self, _range: Range<usize>) -> Option<&[u8]> {
         // TODO: implement this properly
         None
     }
@@ -640,11 +639,11 @@ impl Subspan<RangeFrom<usize>> for Span {
 }
 
 impl Subspan<RangeFull> for Span {
-    fn subspan(&self, range: RangeFull) -> Span {
+    fn subspan(&self, _range: RangeFull) -> Span {
         self.clone()
     }
 
-    fn copy(&self, range: RangeFull) -> Vec<u8> {
+    fn copy(&self, _range: RangeFull) -> Vec<u8> {
         let last_chunk = self.chunks.last().unwrap();
         let length = match self.len() {
             Some(l) => l,
@@ -778,7 +777,7 @@ impl LazyReadStream {
         Ok(())
     }
 
-    fn new_from_source(mut src: ReadSource) -> io::Result<Self> {
+    fn new_from_source(src: ReadSource) -> io::Result<Self> {
         // use an empty first chunk
         let chunk = StreamChunk::new_empty();
 

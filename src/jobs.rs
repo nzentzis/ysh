@@ -2,11 +2,9 @@ use std::os::unix::prelude::*;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::ffi;
-use std::io;
 
 use nix;
 use nix::sys::wait;
-use nix::sys::ioctl;
 use nix::sys::signal;
 use nix::fcntl;
 use nix::unistd;
@@ -184,7 +182,7 @@ impl Command {
                 if let Some(f) = in_par { unistd::close(f).unwrap() }
                 if let Some(f) = out_par { unistd::close(f).unwrap() }
                 if let Some(f) = err_par { unistd::close(f).unwrap(); }
-                let e = self.post_fork((in_chld, out_chld, err_chld),
+                let _ = self.post_fork((in_chld, out_chld, err_chld),
                                        group, args);
 
                 // if we reach this point, we failed to exec
