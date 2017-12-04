@@ -304,6 +304,25 @@ fn core_defmacro(lex: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::empty())
 }
 
+/// Perform macro expansion on the passed form
+fn core_macroexpand(lex: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() != 1 {
+        Err(EvalError::Arity { got: args.len(), expected: 1})
+    } else {
+        args[0].evaluate(lex)?.macroexpand()
+    }
+}
+
+// TODO: once hashmaps are a thing, allow custom environments
+/// Evaluate the passed form in the current lexical environment
+fn core_eval(lex: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() != 1 {
+        Err(EvalError::Arity { got: args.len(), expected: 1})
+    } else {
+        args[0].evaluate(lex)
+    }
+}
+
 /// Utility function combining `def` and `fn`
 /// 
 /// The first argument is interpreted as in `def`, and the remainder are
@@ -328,12 +347,15 @@ pub fn initialize() {
     env.set_immut("do", Value::from(Executable::CoreFn(core_do)));
     env.set_immut("if", Value::from(Executable::CoreFn(core_if)));
 
+
     // macros and quoting
     env.set_immut("quote", Value::from(Executable::CoreFn(core_quote)));
     env.set_immut("defmacro", Value::from(Executable::CoreFn(core_defmacro)));
+    env.set_immut("macroexpand", Value::from(Executable::CoreFn(core_macroexpand)));
 
     // utilities
-    env.set_immut("defn", Value::from(Executable::CoreFn(core_defn)));
+    env.set("defn", Value::from(Executable::CoreFn(core_defn)));
+    env.set("eval", Value::from(Executable::native(core_eval)));
 }
 
 /// Generate a value with the passed args wrapped in a call to `quote`
