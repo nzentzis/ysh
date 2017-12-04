@@ -55,9 +55,10 @@ fn fn_map(env: &Environment, args: &[Value]) -> EvalResult {
     //             until one list runs out of elements
     if args.len() == 1 {
         let func = args[0].clone();
+        let env = env.to_owned();
         return Ok(Value::from(
-                Executable::native(move |env, args| {
-                    map_impl(env, &func, args)
+                Executable::native(move |_, args| {
+                    map_impl(&env, &func, args)
                 })));
     } else if args.len() >= 2 {
         // just run the map operation
@@ -115,9 +116,10 @@ fn filter_impl(env: &Environment, func: &Value, args: &[Value]) -> EvalResult {
 /// On 3 args: filter over concatenated args
 fn fn_filter(env: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
+        let env = env.to_owned();
         let func = args[0].clone();
-        return Ok(Value::from(Executable::native(move |env, args| {
-            filter_impl(env, &func, args) })));
+        return Ok(Value::from(Executable::native(move |_, args| {
+            filter_impl(&env, &func, args) })));
     } else if args.len() >= 2 {
         filter_impl(env, &args[0], &args[1..])
     } else {
@@ -125,6 +127,53 @@ fn fn_filter(env: &Environment, args: &[Value]) -> EvalResult {
             got: args.len(),
             expected: 1
         })
+    }
+}
+
+fn reduce_impl(env: &Environment, func: &Value, init: &Value, args: &[Value]) -> EvalResult {
+    let mut state = init.to_owned();
+
+    let mut iters: Vec<_> = args.iter().cloned().map(|x| x.into_iter()).collect();
+
+    loop {
+        // pull one item from each
+        let items: Option<Vec<_>> = iters.iter_mut()
+                                         .map(|x| x.next())
+                                         .collect();
+
+        if let Some(items) = items {
+            let mut items: Vec<Value> = items.into_iter()
+                                             .collect::<Eval<Vec<_>>>()?;
+            items.insert(0, state.clone());
+            state = func.execute(env, items.as_slice())?;
+        } else {
+            return Ok(state);
+        }
+    }
+}
+
+/// Left-reduce a sequence using a function
+/// 
+/// On 2 args: build transformer reducing using arg 1 starting with seed from
+///            arg 2
+/// On 3 args: reduce normally
+/// On 4+ args: reduce, passing each input element as arguments. For example,
+///             (reduce f 0 (1 2) (3 4) (5 6)) is equivalent to
+///             (f (f 0 1 3 5) 2 4 6)
+fn fn_reduce(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() < 2 {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 2
+        })
+    } else if args.len() == 2 {
+        let env = env.to_owned();
+        let func = args[0].clone();
+        let init = args[1].clone();
+        Ok(Value::from(Executable::native(move |_, args|
+                                          reduce_impl(&env, &func, &init, args))))
+    } else {
+        reduce_impl(env, &args[0], &args[1], &args[2..])
     }
 }
 
@@ -327,6 +376,7 @@ pub fn initialize() {
     
     // higher-order stuff
     env.set("map", Value::from(Executable::native(fn_map)));
+    env.set("reduce", Value::from(Executable::native(fn_reduce)));
     env.set("filter", Value::from(Executable::native(fn_filter)));
 
     // queries
