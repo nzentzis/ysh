@@ -1,8 +1,9 @@
 use std::fmt;
 use std::ops;
+use std::cmp;
 use std::borrow::Borrow;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy)]
 /// A general numeric type
 /// 
 /// This implements a basic version of the Scheme numerical tower
@@ -35,6 +36,38 @@ impl Number {
     /// Generate a new complex number a+bi from real and imaginary components
     pub fn complex(a: f64, b: f64) -> Self {
         Number::Complex {a, b}
+    }
+
+    /// Check whether the given number is an integer
+    pub fn is_integer(&self) -> bool {
+        match self {
+            &Number::Integer(_) => true,
+            _ => false
+        }
+    }
+
+    /// Check whether the given number is an rational
+    pub fn is_rational(&self) -> bool {
+        match self {
+            &Number::Rational {..} => true,
+            _ => false
+        }
+    }
+
+    /// Check whether the given number is an real
+    pub fn is_real(&self) -> bool {
+        match self {
+            &Number::Real(_) => true,
+            _ => false
+        }
+    }
+
+    /// Check whether the given number is an complex
+    pub fn is_complex(&self) -> bool {
+        match self {
+            &Number::Complex {..} => true,
+            _ => false
+        }
     }
 
     /// Cast up to a higher type to match another number
@@ -341,5 +374,48 @@ impl<A> ops::Div<A> for Number where A: Borrow<Number> {
             //    unimplemented!("complex division not yet implemented"),
             _ => panic!("failed to cast numeric values")
         }.simplify()
+    }
+}
+
+impl<A> PartialEq<A> for Number where A: Borrow<Number> {
+    fn eq(&self, other: &A) -> bool {
+        // upcast for testing
+        let rhs = other.borrow();
+        let a = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&a);
+
+        match (a,rhs) {
+            (Number::Integer(a), Number::Integer(b)) => a == b,
+            (Number::Rational{num:a,denom:b}, Number::Rational{num:c,denom:d})=>{
+                let l = lcm(b,d);
+                (a*l) == (c*l)
+            },
+            (Number::Real(a), Number::Real(b)) => a == b,
+            (Number::Complex{a,b}, Number::Complex{a:c,b:d}) => (a,c) == (b,d),
+            _ => panic!("failed to cast numeric values")
+        }
+    }
+}
+
+impl<A> PartialOrd<A> for Number where A: Borrow<Number> {
+    fn partial_cmp(&self, other: &A) -> Option<cmp::Ordering> {
+        let rhs = other.borrow();
+
+        // cannot assign ordering to complex numbers
+        if rhs.is_complex() || self.is_complex() { return None; }
+
+        // upcast for testing
+        let a = self.cast_to_match(rhs);
+        let rhs = rhs.cast_to_match(&a);
+
+        match (a, rhs) {
+            (Number::Integer(n), Number::Integer(m)) => Some(n.cmp(&m)),
+            (Number::Rational{num:a,denom:b}, Number::Rational{num:c,denom:d})=>{
+                let l = lcm(b,d);
+                Some((a*l).cmp(&(c*l)))
+            },
+            (Number::Real(n), Number::Real(m))=> n.partial_cmp(&m),
+            _ => panic!("invalid attempt to compare complex numbers")
+        }
     }
 }

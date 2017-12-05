@@ -125,6 +125,42 @@ fn fn_equal(_: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+/// Return whether all passed arguments are integers
+fn int_q(_: &Environment, args: &[Value]) -> EvalResult {
+    Ok(Value::from(args.iter().map(|x| x.into_num())
+                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Option<Vec<_>>>()
+                       .map(|v| v.into_iter().all(|n| n.is_integer()))
+                       .unwrap_or(false)))
+}
+
+/// Return whether all passed arguments are rationals
+fn rational_q(_: &Environment, args: &[Value]) -> EvalResult {
+    Ok(Value::from(args.iter().map(|x| x.into_num())
+                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Option<Vec<_>>>()
+                       .map(|v| v.into_iter().all(|n| n.is_rational()))
+                       .unwrap_or(false)))
+}
+
+/// Return whether all passed arguments are reals
+fn real_q(_: &Environment, args: &[Value]) -> EvalResult {
+    Ok(Value::from(args.iter().map(|x| x.into_num())
+                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Option<Vec<_>>>()
+                       .map(|v| v.into_iter().all(|n| n.is_real()))
+                       .unwrap_or(false)))
+}
+
+/// Return whether all passed arguments are complexs
+fn complex_q(_: &Environment, args: &[Value]) -> EvalResult {
+    Ok(Value::from(args.iter().map(|x| x.into_num())
+                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Option<Vec<_>>>()
+                       .map(|v| v.into_iter().all(|n| n.is_complex()))
+                       .unwrap_or(false)))
+}
+
 pub fn initialize() {
     let env = global();
     env.set("+", Value::from(Executable::native(fn_add)));
@@ -132,7 +168,14 @@ pub fn initialize() {
     env.set("*", Value::from(Executable::native(fn_mul)));
     env.set("/", Value::from(Executable::native(fn_div)));
 
+    // comparisons
     env.set("=", Value::from(Executable::native(fn_equal)));
+
+    // numeric type queries
+    env.set("int?", Value::from(Executable::native(int_q)));
+    env.set("rational?", Value::from(Executable::native(rational_q)));
+    env.set("real?", Value::from(Executable::native(real_q)));
+    env.set("complex?", Value::from(Executable::native(complex_q)));
 
     env.set("inc", Value::from(Executable::native(fn_inc)));
 }
