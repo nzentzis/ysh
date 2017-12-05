@@ -161,6 +161,48 @@ fn complex_q(_: &Environment, args: &[Value]) -> EvalResult {
                        .unwrap_or(false)))
 }
 
+/// Utility for implmementing numeric comparison ops
+fn ord_compare<F>(args: &[Value], f: F) -> EvalResult
+        where F: Fn(&Number,&Number) -> bool {
+    if args.is_empty() { return Ok(Value::from(true)) }
+    let mut last = None;
+    for i in args.into_iter() {
+        let v = i.into_num()?
+                 .ok_or(EvalError::TypeError(
+                         String::from("value is not number-like")))?;
+        if let &Some(ref l) = &last {
+            if !f(l,&v) { return Ok(Value::from(false)) }
+        }
+        last = Some(v)
+    }
+    
+    return Ok(Value::from(true))
+}
+
+/// Return whether values are in monotonically increasing order
+/// 
+/// If applied to no args, returns true
+fn fn_lt(_: &Environment, args: &[Value]) -> EvalResult {
+    ord_compare(args, |a,b| a < b) }
+
+/// Return whether values are in monotonically decreasing order
+/// 
+/// If applied to no args, returns true
+fn fn_gt(_: &Environment, args: &[Value]) -> EvalResult {
+    ord_compare(args, |a,b| a > b) }
+
+/// Return whether values are in monotonically non-decreasing order
+/// 
+/// If applied to no args, returns true
+fn fn_le(_: &Environment, args: &[Value]) -> EvalResult {
+    ord_compare(args, |a,b| a <= b) }
+
+/// Return whether values are in monotonically non-increasing order
+/// 
+/// If applied to no args, returns true
+fn fn_ge(_: &Environment, args: &[Value]) -> EvalResult {
+    ord_compare(args, |a,b| a >= b) }
+
 pub fn initialize() {
     let env = global();
     env.set("+", Value::from(Executable::native(fn_add)));
@@ -170,6 +212,10 @@ pub fn initialize() {
 
     // comparisons
     env.set("=", Value::from(Executable::native(fn_equal)));
+    env.set("<", Value::from(Executable::native(fn_lt)));
+    env.set(">", Value::from(Executable::native(fn_gt)));
+    env.set("<=", Value::from(Executable::native(fn_le)));
+    env.set(">=", Value::from(Executable::native(fn_ge)));
 
     // numeric type queries
     env.set("int?", Value::from(Executable::native(int_q)));
