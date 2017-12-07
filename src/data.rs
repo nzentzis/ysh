@@ -54,6 +54,7 @@ pub type Eval<T> = Result<T, EvalError>;
 pub enum EvalError {
     Unknown,
     IO(::std::io::Error),
+    Runtime(String),
     InvalidOperation(&'static str),
     TypeError(String),
     Arity {
@@ -73,6 +74,8 @@ impl ::std::fmt::Display for EvalError {
                 write!(f, "Invalid operation: {}", s),
             &EvalError::TypeError(ref s) =>
                 write!(f, "Type error: {}", s),
+            &EvalError::Runtime(ref s) =>
+                write!(f, "Runtime error: {}", s),
             &EvalError::Arity {got, expected} =>
                 write!(f, "Got {} arguments, expected {}", got, expected),
         }
@@ -86,6 +89,7 @@ impl ::std::error::Error for EvalError {
             &EvalError::IO(_) => &"I/O error",
             &EvalError::InvalidOperation(_) => &"invalid operation",
             &EvalError::TypeError(_) => &"type error",
+            &EvalError::Runtime(_) => &"runtime error",
             &EvalError::Arity{..} => &"arity mismatch",
         }
     }

@@ -564,12 +564,15 @@ impl TransformEvaluation {
             };
             match out {
                 EvalOutput::PrettyStdout => {
-                    match res.into_str() {
-                        Ok(s) => {
-                            println!("{}", s);
-                        },
-                        Err(e) => {
-                            println!("ysh: cannot convert to string: {}", e);
+                    // don't bother printing if they return null
+                    if res != Value::empty() {
+                        match res.into_str() {
+                            Ok(s) => {
+                                println!("{}", s);
+                            },
+                            Err(e) => {
+                                println!("ysh: cannot convert to string: {}", e);
+                            }
                         }
                     }
                 },
