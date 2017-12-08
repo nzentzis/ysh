@@ -8,7 +8,7 @@ use nix::unistd;
 
 use data::*;
 use evaluate::find_command;
-use environment::{global, empty};
+use environment::{global, empty, run_fn};
 use jobs::{Command, Job, IoChannel};
 use stream::*;
 
@@ -341,6 +341,42 @@ impl Plan {
                     let args = args.into_iter()
                                    .map(|a| a.evaluate(&empty()))
                                    .collect::<Eval<Vec<_>>>()
+                                   .and_then(|a|
+                                         a.into_iter()
+                                          .map(|x| match &x.data {
+                                              // don't expand fns or macros
+                                              &ValueData::Function(_) =>
+                                                  x.name.clone()
+                                                        .map(|x| Value::from(x))
+                                                        .unwrap_or(x),
+                                              &ValueData::Macro(_) =>
+                                                  x.name.clone()
+                                                        .map(|x| Value::from(x))
+                                                        .unwrap_or(x),
+                                              _ => x
+                                          })
+                                          .map(|x| match &x.data {
+                                              &ValueData::Symbol(_) =>
+                                                  run_fn("fs/glob", &[x.clone()])
+                                                 .unwrap_or(Ok(x.clone()))
+                                                 .map(|l|
+                                                      if l.into_seq().unwrap().len() == 0 {
+                                                          x.clone()
+                                                      } else {
+                                                          l
+                                                      }),
+                                              &ValueData::Str(_) =>
+                                                  run_fn("fs/glob", &[x.clone()])
+                                                 .unwrap_or(Ok(x.clone()))
+                                                 .map(|l|
+                                                      if l.into_seq().unwrap().len() == 0 {
+                                                          x.clone()
+                                                      } else {
+                                                          l
+                                                      }),
+                                              _ => Ok(x)
+                                          })
+                                          .collect::<Eval<Vec<Value>>>())
                                    .and_then(|a| a.into_iter()
                                                   .map(|x| x.into_args())
                                                   .collect::<Eval<Vec<_>>>())
