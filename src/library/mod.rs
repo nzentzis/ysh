@@ -3,6 +3,7 @@ pub mod core;
 mod operators;
 mod sequence;
 mod async;
+mod filesystem;
 
 pub fn initialize() {
     core::initialize();
@@ -10,4 +11,5 @@ pub fn initialize() {
     operators::initialize();
     sequence::initialize();
     async::initialize();
+    filesystem::initialize();
 }
