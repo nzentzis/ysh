@@ -182,45 +182,31 @@ impl Plan {
         let mut first = None;
         let mut last = None;
         for t in terminals {
-            match t {
-                TerminalMode::ReplaceFile(s) => {
-                    if last.is_some() {
-                        return Err(PlanningError::MultipleOutputs);
-                    }
-                    last = Some(PlanElement::ToFile(s));
-                },
-                TerminalMode::AppendFile(s) => {
-                    if last.is_some() {
-                        return Err(PlanningError::MultipleOutputs);
-                    }
-                    last = Some(PlanElement::AppendFile(s));
-                },
-                TerminalMode::SetVariable(id) => {
-                    if last.is_some() {
-                        return Err(PlanningError::MultipleOutputs);
-                    }
-                    last = Some(PlanElement::IntoVar(id));
-                },
-                TerminalMode::AppendVariable(id) => {
-                    if last.is_some() {
-                        return Err(PlanningError::MultipleOutputs);
-                    }
-                    last = Some(PlanElement::AppendVar(id));
-                },
-                TerminalMode::InputFile(s) => {
-                    if first.is_some() {
-                        return Err(PlanningError::MultipleInputs);
-                    }
-                    first = Some(PlanElement::FromFile(s));
-                },
-                TerminalMode::InputVar(id) => {
-                    if first.is_some() {
-                        return Err(PlanningError::MultipleInputs);
-                    }
-                    first = Some(PlanElement::FromVar(id));
-                },
+            let (f,l) = match t {
+                TerminalMode::ReplaceFile(s) =>
+                    (None, Some(PlanElement::ToFile(s))),
+                TerminalMode::AppendFile(s) =>
+                    (None, Some(PlanElement::AppendFile(s))),
+                TerminalMode::SetVariable(id) =>
+                    (None, Some(PlanElement::IntoVar(id))),
+                TerminalMode::AppendVariable(id) =>
+                    (None, Some(PlanElement::AppendVar(id))),
+                TerminalMode::InputFile(s) =>
+                    (Some(PlanElement::FromFile(s)), None),
+                TerminalMode::InputVar(id) =>
+                    (Some(PlanElement::FromVar(id)), None),
+            };
+
+            if let Some(f) = f {
+                if first.is_some() {return Err(PlanningError::MultipleInputs);}
+                first = Some(f);
+            }
+            if let Some(l) = l {
+                if last.is_some() {return Err(PlanningError::MultipleOutputs);}
+                last = Some(l);
             }
         }
+
         res.push(first.unwrap_or(PlanElement::Stdin));
         let last = last.unwrap_or(PlanElement::Stdout);
 
@@ -243,7 +229,7 @@ impl Plan {
 
             // add the user's requested pipe
             if let Some(mode) = link {
-                let elem = match mode {
+                let to_add = match mode {
                     PipeMode::DelimitedPipe(c) =>
                         Some(PlanElement::Adapter(AdapterType::StreamDelim(c))),
                     PipeMode::Pipe => None,
@@ -251,7 +237,7 @@ impl Plan {
                         Some(PlanElement::Adapter(AdapterType::StreamToString))
                 };
 
-                if let Some(e) = elem {
+                if let Some(e) = to_add {
                     // don't add adapter if it wouldn't help
                     if e.io_types().1 != last_output {
                         last_output = e.io_types().1;
