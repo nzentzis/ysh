@@ -1,4 +1,3 @@
-#[macro_use] extern crate nom;
 #[macro_use] extern crate lazy_static;
 extern crate regex;
 extern crate termion;
@@ -18,7 +17,6 @@ mod library;
 
 #[allow(dead_code)] mod editor;
 mod input;
-mod parse;
 
 #[allow(dead_code)] mod jobs;
 mod evaluate;

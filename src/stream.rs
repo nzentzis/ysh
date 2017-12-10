@@ -454,14 +454,14 @@ impl ValueLike for PolyField {
     }
 
     fn into_num(&self) -> Eval<Option<Number>> {
-        use parse::numeric_value;
+        use reader::parse_number;
 
         // try parsing as a number
         let data = self.data.copy(..);
-        let n = numeric_value(data.as_slice());
+        let n = parse_number(data.as_slice());
 
-        if let Ok(n) = n.to_result() {
-            n.into_num()
+        if let Ok(n) = n {
+            Ok(Some(n))
         } else {
             Ok(None)
         }

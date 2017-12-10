@@ -398,6 +398,12 @@ fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Parse<Number> {
     }
 }
 
+pub fn parse_number(x: &[u8]) -> Parse<Number> {
+    use std::io::Cursor;
+
+    read_number(&mut PeekReadChars::new(&mut Cursor::new(x)))
+}
+
 fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
     let c = peek.next()?;
 
