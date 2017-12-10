@@ -2,6 +2,7 @@ use std::os::unix::prelude::*;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::ffi;
+use std::thread;
 
 use nix;
 use nix::sys::wait;
@@ -259,6 +260,7 @@ pub enum ProcessStatus {
     Running
 }
 
+/// Control handle for an OS-level process
 pub struct Process {
     pid: unistd::Pid,
     pgid: unistd::Pid,
@@ -305,20 +307,98 @@ impl Process {
         }
         Ok(())
     }
+
+    /// Suspend the process using `SIGSTOP`
+    pub fn suspend(&mut self) -> nix::Result<()> {
+        signal::kill(self.pid, signal::Signal::SIGSTOP)
+    }
+
+    /// Resume the process using `SIGCONT`
+    pub fn resume(&mut self) -> nix::Result<()> {
+        signal::kill(self.pid, signal::Signal::SIGCONT)
+    }
 }
 
-/// A structure representing a collection of processes which can be manipulated
-/// as a unit
+/// An active function evaluation which can be controlled as part of a job
+pub struct ShellTask {
+    handle: Option<thread::JoinHandle<()>>
+}
+
+impl ShellTask {
+    /// Start a new shell task using the given function
+    pub fn start<F: Fn() -> ()+Sync+Send+'static>(f: F) -> Self {
+        let h = thread::spawn(move || f());
+
+        ShellTask {
+            handle: Some(h)
+        }
+    }
+
+    /// Suspend the evaluation thread
+    pub fn suspend(&mut self) -> nix::Result<()> {
+        unimplemented!()
+    }
+
+    /// Resume the evaluation thread
+    pub fn resume(&mut self) -> nix::Result<()> {
+        unimplemented!()
+    }
+
+    /// Wait until the evaluation completes
+    pub fn wait(&mut self) -> nix::Result<()> {
+        if let Some(h) = self.handle.take() {
+            h.join().unwrap();
+        }
+        Ok(())
+    }
+}
+
+/// A concurrent operation which can be controlled as part of a job.
+/// 
+/// This can either be an OS-level process or a shell-internal task.
+pub enum Task {
+    OS(Process),
+    Internal(ShellTask)
+}
+
+impl Task {
+    /// Suspend the task
+    pub fn suspend(&mut self) -> nix::Result<()> {
+        match self {
+            &mut Task::OS(ref mut p) => p.suspend(),
+            &mut Task::Internal(ref mut e) => e.suspend(),
+        }
+    }
+
+    /// Resume the task
+    pub fn resume(&mut self) -> nix::Result<()> {
+        match self {
+            &mut Task::OS(ref mut p) => p.resume(),
+            &mut Task::Internal(ref mut e) => e.resume(),
+        }
+    }
+
+    /// Wait for the task to terminate or change status
+    pub fn wait(&mut self) -> nix::Result<()> {
+        match self {
+            &mut Task::OS(ref mut p) => p.wait(),
+            &mut Task::Internal(ref mut e) => e.wait(),
+        }
+    }
+}
+
+/// A structure representing a collection of tasks which can be manipulated as
+/// a unit
 pub struct Job {
     pgroup: Option<unistd::Pid>,
-    procs: Vec<Process>
+    tasks: Vec<Task>
 }
 
 impl Job {
     pub fn new() -> Self {
         Job {
             pgroup: None,
-            procs: Vec::new()
+            tasks: Vec::new()
         }
     }
 
@@ -329,8 +409,18 @@ impl Job {
             self.pgroup = Some(p.pgid);
         }
 
-        self.procs.push(p);
-        Ok(self.procs.last().unwrap())
+        self.tasks.push(Task::OS(p));
+        if let &Task::OS(ref p) = self.tasks.last().unwrap() { Ok(p) }
+        else { panic!() }
+    }
+
+    /// Start evaluating an internal task as part of this job
+    pub fn spawn<F: Fn() -> ()+Sync+Send+'static>(&mut self, f: F) -> &ShellTask {
+        let t = ShellTask::start(f);
+
+        self.tasks.push(Task::Internal(t));
+        if let &Task::Internal(ref p) = self.tasks.last().unwrap() { p }
+        else { panic!() }
     }
 
     /// Send a signal to all the processes in the group
@@ -350,20 +440,28 @@ impl Job {
     }
 
     /// Suspend all processes in the group
-    pub fn suspend(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGSTOP)}
+    pub fn suspend(&mut self) -> nix::Result<()> {
+        self.signal(signal::Signal::SIGSTOP)
+    }
 
     /// Resume all processes in the group
-    pub fn resume(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGCONT)}
+    pub fn resume(&mut self) -> nix::Result<()> {
+        self.signal(signal::Signal::SIGCONT)
+    }
 
     /// Terminate all processes in the group
-    pub fn terminate(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGTERM)}
+    pub fn terminate(&mut self) -> nix::Result<()> {
+        self.signal(signal::Signal::SIGTERM)
+    }
 
     /// Forcibly kill all processes in the group
-    pub fn kill(&mut self) -> nix::Result<()> {self.signal(signal::Signal::SIGKILL)}
+    pub fn kill(&mut self) -> nix::Result<()> {
+        self.signal(signal::Signal::SIGKILL)
+    }
 
     /// Wait for all child processes to terminate
     pub fn wait(&mut self) -> nix::Result<()> {
-        for c in self.procs.iter_mut() {
+        for c in self.tasks.iter_mut() {
             c.wait()?;
         }
 
