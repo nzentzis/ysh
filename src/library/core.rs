@@ -166,7 +166,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
                 if should_end || next_is_rest {
                     return Err(EvalError::InvalidOperation("invalid fn pattern"));
                 }
-                let ident = if let PatternPiece::Rest(x) = r.pop().unwrap() {x}
+                let ident = if let PatternPiece::Required(x) = r.pop().unwrap() {x}
                             else { return Err(EvalError::InvalidOperation(
                                         "invalid fn pattern")); };
                 r.push(PatternPiece::Optional(ident));
@@ -364,4 +364,102 @@ pub fn quote(vals: &[Value]) -> Value {
     r.push(Value::from(Executable::CoreFn(core_quote)));
     r.extend(vals.iter().cloned());
     Value::list(r)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use numeric::Number;
+
+    #[test]
+    fn test_if() {
+        let mut e = empty();
+        {
+            let mut x = e.exclusive();
+            x.set("t", Value::from(true));
+            x.set("f", Value::from(false));
+        }
+        let t = Value::from(Identifier::new("t"));
+        let f = Value::from(Identifier::new("f"));
+        let n1 = Value::from(Number::int(1));
+        let n2 = Value::from(Number::int(2));
+
+        assert_eq!(core_if(&e, &[t.clone(), n1.clone()]).unwrap(), n1);
+        assert_eq!(core_if(&e, &[f.clone(), n1.clone()]).unwrap(),
+                   Value::empty());
+        assert_eq!(core_if(&e, &[t.clone(), n1.clone(), n2.clone()]).unwrap(), n1);
+        assert_eq!(core_if(&e, &[f.clone(), n1.clone(), n2.clone()]).unwrap(), n2);
+        assert!(core_if(&e, &[]).is_err());
+    }
+
+    #[test]
+    fn test_def() {
+        let e = empty();
+        let test_sym = Value::from(Identifier::new("def_test_sym"));
+        assert!(core_def(&e, &[]).is_err());
+        assert!(core_def(&e, &[Value::from(true)]).is_err());
+        assert!(core_def(&e, &[Value::from(true), Value::from(true)]).is_err());
+        assert!(global().get("def_test_sym").is_none());
+        assert_eq!(core_def(&e, &[test_sym.clone()]).unwrap(), Value::empty());
+        assert_eq!(core_def(&e, &[test_sym.clone(), Value::from(true)]).unwrap(),
+                   Value::empty());
+        assert_eq!(global().get("def_test_sym"), Some(Value::from(true)));
+        assert_eq!(core_def(&e, &[test_sym.clone()]).unwrap(),
+                   Value::from(true));
+    }
+
+    #[test]
+    fn test_let() {
+        let e = empty();
+        let test_sym = Value::from(Identifier::new("let_test_sym"));
+        assert_eq!(test_sym.evaluate(&e).unwrap(), test_sym);
+        assert_eq!(core_let(&e, &[Value::list(vec![test_sym.clone(),
+                                                   Value::from(true)]),
+                                  test_sym]).unwrap(), Value::from(true));
+    }
+
+    #[test]
+    fn test_fn() {
+        let e = empty();
+
+        // single-variant tests
+        let f1 = core_fn(&e, &[Value::list(vec![
+                                           Value::from(Identifier::new("a"))]),
+                               Value::from(Identifier::new("a"))]).unwrap();
+        assert_eq!(f1.execute(&e, &[Value::from(true)]).unwrap(), Value::from(true));
+        assert!(f1.execute(&e, &[]).is_err());
+
+        let f2 = core_fn(&e, &[Value::list(vec![
+                                           Value::from(Identifier::new("a")),
+                                           Value::from(Identifier::new("?"))]),
+                               Value::from(Identifier::new("a"))]).unwrap();
+        assert_eq!(f2.execute(&e, &[Value::from(true)]).unwrap(), Value::from(true));
+        assert_eq!(f2.execute(&e, &[]).unwrap(), Value::empty());
+
+        let f3 = core_fn(&e, &[Value::list(vec![
+                                           Value::from(Identifier::new("&")),
+                                           Value::from(Identifier::new("rest"))]),
+                               Value::from(Identifier::new("rest"))]).unwrap();
+        assert_eq!(f3.execute(&e, &[Value::from(true)]).unwrap(),
+                   Value::list(vec![Value::from(true)]));
+        assert_eq!(f3.execute(&e, &[]).unwrap(), Value::empty());
+
+        // multivariant test
+        let f4 = core_fn(&e, &[
+            Value::list(vec![Value::list(vec![Value::from(Identifier::new("a"))]),
+                             Value::from(Identifier::new("a"))]),
+            Value::list(vec![Value::list(vec![Value::from(Identifier::new("a")),
+                                              Value::from(Identifier::new("?"))]),
+                             Value::from(Identifier::new("a"))]),
+            Value::list(vec![Value::list(vec![Value::from(Identifier::new("&")),
+                                              Value::from(Identifier::new("rest"))]),
+                             Value::from(Identifier::new("rest"))])]).unwrap();
+
+        assert_eq!(f4.execute(&e, &[]).unwrap(), Value::empty());
+        assert_eq!(f4.execute(&e, &[Value::from(true)]).unwrap(),
+                   Value::from(true));
+        assert_eq!(f4.execute(&e, &[Value::from(true),
+                                    Value::from(false)]).unwrap(),
+                   Value::list(vec![Value::from(true), Value::from(false)]));
+    }
 }
