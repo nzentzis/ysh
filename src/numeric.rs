@@ -137,6 +137,30 @@ impl Number {
                                     else { Number::Complex{a,b} }
         }
     }
+
+    /// Simplify the number to a lower form in place
+    /// 
+    /// This has the same semantics as the `simplify` function
+    pub fn simplify_inplace(&mut self) {
+        match self {
+            &mut Number::Rational{ref mut num, ref mut denom}
+                if *num % *denom != 0 => {
+                    let g = gcd(*num,*denom);
+                    *num /= g;
+                    *denom /= g;
+                },
+            &mut Number::Rational{num, denom} => {
+                *self = Number::Integer(num / denom);
+            },
+            &mut Number::Real(f) =>
+                if f.fract() == 0. {
+                    *self = Number::Integer(f.trunc() as i64)
+                },
+            &mut Number::Complex{a, b} =>
+                if b == 0. { *self = Number::Real(a).simplify() },
+            _ => {}
+        }
+    }
 }
 
 impl fmt::Debug for Number {
@@ -217,25 +241,8 @@ impl<A> ops::AddAssign<A> for Number where A: Borrow<Number> {
         *self = self.cast_to_match(rhs);
         let rhs = rhs.cast_to_match(&self);
 
-        match (self,rhs) {
-            (&mut Number::Integer(ref mut a), Number::Integer(b)) => { *a += b },
-            (&mut Number::Rational{ref mut num,ref mut denom},
-             Number::Rational{num:a,denom:b}) => {
-                let d = lcm(*denom, b);
-                let n_x = (d / *denom) * (*num);
-                let n_y = (d/b)*a;
-                let n = n_x + n_y;
-
-                *num = n;
-                *denom = d;
-            },
-            (&mut Number::Real(ref mut a), Number::Real(b)) => { *a += b; },
-            (&mut Number::Complex{ref mut a,ref mut b}, Number::Complex{a:x,b:y}) => {
-                *a += x;
-                *b += y;
-            },
-            _ => panic!("failed to cast numeric values")
-        }
+        *self = *self + rhs;
+        self.simplify_inplace();
     }
 }
 
@@ -275,25 +282,8 @@ impl<A> ops::SubAssign<A> for Number where A: Borrow<Number> {
         *self = self.cast_to_match(rhs);
         let rhs = rhs.cast_to_match(&self);
 
-        match (self,rhs) {
-            (&mut Number::Integer(ref mut a), Number::Integer(b)) => { *a -= b },
-            (&mut Number::Rational{ref mut num,ref mut denom},
-             Number::Rational{num:a,denom:b}) => {
-                let d = lcm(*denom, b);
-                let n_x = (d / *denom) * (*num);
-                let n_y = (d/b)*a;
-                let n = n_x - n_y;
-
-                *num = n;
-                *denom = d;
-            },
-            (&mut Number::Real(ref mut a), Number::Real(b)) => { *a -= b; },
-            (&mut Number::Complex{ref mut a,ref mut b}, Number::Complex{a:x,b:y}) => {
-                *a -= x;
-                *b -= y;
-            },
-            _ => panic!("failed to cast numeric values")
-        }
+        *self = *self - rhs;
+        self.simplify_inplace();
     }
 }
 
@@ -336,23 +326,8 @@ impl<A> ops::MulAssign<A> for Number where A: Borrow<Number> {
         *self = self.cast_to_match(rhs);
         let rhs = rhs.cast_to_match(&self);
 
-        match (self, rhs) {
-            (&mut Number::Integer(ref mut a), Number::Integer(b)) => {*a *= b},
-            (&mut Number::Rational{num:ref mut a,denom:ref mut b},
-                  Number::Rational{num:c,denom:d})=> {
-                *a *= c;
-                *b *= d;
-            },
-            (&mut Number::Real(ref mut a), Number::Real(b)) => {*a *= b},
-            (&mut Number::Complex{ref mut a,ref mut b},
-                  Number::Complex{a:c,b:d}) => {
-                let n_a = (*a)*c - (*b)*d;
-                let n_b = (*a)*d + c*(*b);
-                *a = n_a;
-                *b = n_b;
-            },
-            _ => panic!("failed to cast numeric values")
-        }
+        *self = *self * rhs;
+        self.simplify_inplace();
     }
 }
 
@@ -412,10 +387,176 @@ impl<A> PartialOrd<A> for Number where A: Borrow<Number> {
             (Number::Integer(n), Number::Integer(m)) => Some(n.cmp(&m)),
             (Number::Rational{num:a,denom:b}, Number::Rational{num:c,denom:d})=>{
                 let l = lcm(b,d);
-                Some((a*l).cmp(&(c*l)))
+                Some((a*(l/b)).cmp(&(c*(l/d))))
             },
             (Number::Real(n), Number::Real(m))=> n.partial_cmp(&m),
             _ => panic!("invalid attempt to compare complex numbers")
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn basic_props() {
+        let n1 = Number::int(1);
+        let n2 = Number::rational(1, 2);
+        let n3 = Number::real(1.5);
+        let n4 = Number::complex(1., -1.);
+
+        assert_eq!((n1.is_integer(),
+                    n1.is_rational(),
+                    n1.is_real(),
+                    n1.is_complex()),
+                   (true, false, false, false));
+        assert_eq!((n2.is_integer(),
+                    n2.is_rational(),
+                    n2.is_real(),
+                    n2.is_complex()),
+                   (false, true, false, false));
+        assert_eq!((n3.is_integer(),
+                    n3.is_rational(),
+                    n3.is_real(),
+                    n3.is_complex()),
+                   (false, false, true, false));
+        assert_eq!((n4.is_integer(),
+                    n4.is_rational(),
+                    n4.is_real(),
+                    n4.is_complex()),
+                   (false, false, false, true));
+    }
+
+    #[test]
+    fn addition() {
+        let n1 = Number::int(1);
+        let n2 = Number::rational(1, 2);
+        let n3 = Number::real(1.5);
+        let n4 = Number::complex(1., -1.);
+
+        assert_eq!(n1+n1, Number::int(2));
+        assert_eq!(n2+n2, Number::int(1));
+        assert_eq!(n1+n2, Number::real(1.5));
+        assert_eq!(n3+n3, Number::real(3.));
+        assert_eq!(n1+n3, Number::real(2.5));
+        assert_eq!(n4+n4, Number::complex(2., -2.));
+        assert_eq!(n4+Number::complex(0.,1.), Number::int(1));
+
+        let mut m = n1.clone();
+        m += n1;
+        assert_eq!(m, Number::int(2));
+
+        m = n2.clone();
+        m += n2;
+        assert_eq!(m, Number::int(1));
+
+        m = n1.clone();
+        m += n2;
+        assert_eq!(m, Number::real(1.5));
+
+        m = n3.clone();
+        m += n3;
+        assert_eq!(m, Number::real(3.));
+
+        m = n1.clone();
+        m += n3;
+        assert_eq!(m, Number::real(2.5));
+
+        m = n4.clone();
+        m += n4;
+        assert_eq!(m, Number::complex(2., -2.));
+
+        m = n4.clone();
+        m += Number::complex(0., 1.);
+        assert_eq!(m, Number::int(1));
+
+    }
+
+    #[test]
+    fn subtraction() {
+        let n1 = Number::int(1);
+        let n2 = Number::rational(1, 2);
+        let n3 = Number::real(1.5);
+        let n4 = Number::complex(1., -1.);
+
+        assert_eq!(n1-n1, Number::int(0));
+        assert_eq!(n2-n2, Number::int(0));
+        assert_eq!(n1-n2, Number::rational(1,2));
+        assert_eq!(n3-n2, Number::int(1));
+        assert_eq!(n4-n4, Number::int(0));
+        assert_eq!(n4-Number::complex(0.,-1.), Number::int(1));
+
+        let mut m = n1.clone();
+        m -= n1;
+        assert_eq!(m, Number::int(0));
+
+        m = n2.clone();
+        m -= n2;
+        assert_eq!(m, Number::int(0));
+
+        m = n1.clone();
+        m -= n2;
+        assert_eq!(m, Number::rational(1,2));
+
+        m = n3.clone();
+        m -= n2;
+        assert_eq!(m, Number::int(1));
+
+        m = n4.clone();
+        m -= n4;
+        assert_eq!(m, Number::int(0));
+
+        m = n4.clone();
+        m -= Number::complex(0., -1.);
+        assert_eq!(m, Number::int(1));
+    }
+
+    #[test]
+    fn negate() {
+        assert_eq!(-Number::int(1), Number::int(-1));
+        assert_eq!(-Number::real(1.), Number::real(-1.));
+        assert_eq!(-Number::rational(1,2), Number::rational(-1,2));
+        assert_eq!(-Number::complex(1.,2.), Number::complex(-1.,-2.));
+    }
+
+    #[test]
+    fn multiply() {
+        let n1 = Number::int(1);
+        let n2 = Number::rational(1, 2);
+        let n3 = Number::real(1.5);
+        let n4 = Number::complex(1., -1.);
+
+        assert_eq!(n1*n2, n2);
+        assert_eq!(n2*n2, Number::rational(1,4));
+        assert_eq!(n2*n3, Number::real(0.75));
+        assert_eq!(n4*n4, Number::complex(0., -2.));
+
+        let mut m = n1.clone();
+        m *= n2; assert_eq!(m, n2);
+        m = n2; m *= n2; assert_eq!(m, Number::rational(1,4));
+        m = n2; m *= n3; assert_eq!(m, Number::real(0.75));
+        m = n4; m *= n4; assert_eq!(m, Number::complex(0., -2.));
+    }
+
+    #[test]
+    fn divide() {
+        assert_eq!(Number::int(1)/Number::int(2), Number::rational(1,2));
+        assert_eq!(Number::rational(1,2)/Number::rational(1,4), Number::int(2));
+        assert_eq!(Number::real(2.)/Number::real(0.75), Number::real(2. + (2./3.)));
+    }
+
+    #[test]
+    fn ord() {
+        let i1 = Number::int(1);
+        let i2 = Number::int(2);
+        let r1 = Number::rational(2, 9);
+        let r2 = Number::rational(2, 7);
+        let f1 = Number::real(2.9);
+        let f2 = Number::real(2.7);
+
+        assert_eq!(i1.partial_cmp(&i2), Some(cmp::Ordering::Less));
+        assert_eq!(r1.partial_cmp(&r2), Some(cmp::Ordering::Less));
+        assert_eq!(f1.partial_cmp(&f2), Some(cmp::Ordering::Greater));
     }
 }
