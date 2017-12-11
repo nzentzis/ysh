@@ -391,7 +391,7 @@ impl<A> PartialEq<A> for Number where A: Borrow<Number> {
                 (a*l) == (c*l)
             },
             (Number::Real(a), Number::Real(b)) => a == b,
-            (Number::Complex{a,b}, Number::Complex{a:c,b:d}) => (a,c) == (b,d),
+            (Number::Complex{a,b}, Number::Complex{a:c,b:d}) => (a,b) == (c,d),
             _ => panic!("failed to cast numeric values")
         }
     }
