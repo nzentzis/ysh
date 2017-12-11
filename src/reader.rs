@@ -585,6 +585,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                     Value::from(Identifier::from(format!("|>")))
                 } else {
                     if peek.peek()? == '>' {
+                        peek.next()?;
                         Value::from(Identifier::from(format!("|{}>", fwd)))
                     } else {
                         peek.push(fwd);
@@ -690,10 +691,13 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
         // redirects (append/replace) (file/var)
         OutReplaceFile, OutAppendFile, OutReplaceVar, OutAppendVar,
         InFile, InVar, // input redirects (file/var)
+        TerminalDone,
     }
 
     let mut s = PRS::S;
     let mut cur_component = Vec::new();
+    let mut out_done = false;
+    let mut in_done = false;
 
     loop {
         let tok = internal_read(&mut peek, false).map(Some)
@@ -701,6 +705,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                      ParseError::UnexpectedEOF => Ok(None),
                      e => Err(e)
                  })?;
+        println!("({:?}){:?}", s, tok);
 
         match s {
             PRS::S => {
@@ -723,31 +728,38 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
             PRS::F => {
                 let tok = if let Some(tok) = tok { tok } else {
                     // if EOF, terminate the pipeline
-                        let part = PipelineComponent {
-                            xform: Transformer(cur_component.drain(..).collect()),
-                            link: None
-                        };
-                        pipeline.elements.push(part);
-                        return Ok(pipeline);
+                    let part = PipelineComponent {
+                        xform: Transformer(cur_component.drain(..).collect()),
+                        link: None
+                    };
+                    pipeline.elements.push(part);
+                    return Ok(pipeline);
                 };
 
                 if let Some(sym) = tok.get_symbol()? {
                     // check if it's a pipe separator
-                    if let Some(mode) = get_pipe(&sym) {
+                    let mut pipe_mode = None;
+                    let next_state =
+                        if let Some(mode) = get_pipe(&sym) {
+                            pipe_mode = Some(mode);
+                            Some(PRS::Pipe) }
+                        else if sym.as_ref() == ">" {Some(PRS::OutReplaceFile)}
+                        else if sym.as_ref() == ">>" {Some(PRS::OutAppendFile)}
+                        else if sym.as_ref() == ">=" {Some(PRS::OutReplaceVar)}
+                        else if sym.as_ref() == ">>=" {Some(PRS::OutAppendVar)}
+                        else if sym.as_ref() == "<" {Some(PRS::InFile)}
+                        else if sym.as_ref() == "<=" {Some(PRS::InVar)}
+                        else { cur_component.push(tok); None };
+
+                    if let Some(next) = next_state {
                         // finish the component
                         let part = PipelineComponent {
                             xform: Transformer(cur_component.drain(..).collect()),
-                            link: Some(mode)
+                            link: pipe_mode
                         };
                         pipeline.elements.push(part);
-                        s = PRS::Pipe;
-                    } else if sym.as_ref() == ">" { s = PRS::OutReplaceFile; }
-                    else if sym.as_ref() == ">>" { s = PRS::OutAppendFile; }
-                    else if sym.as_ref() == ">=" { s = PRS::OutReplaceVar; }
-                    else if sym.as_ref() == ">>=" { s = PRS::OutAppendVar; }
-                    else if sym.as_ref() == "<" { s = PRS::InFile; }
-                    else if sym.as_ref() == "<=" { s = PRS::InVar; }
-                    else { cur_component.push(tok); }
+                        s = next;
+                    }
                 } else {
                     s = PRS::F;
                     cur_component.push(tok);
@@ -775,9 +787,10 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 
                 // evaluate the token and try converting to a string
                 let res = tok.evaluate(&::environment::empty())?;
-                let s = res.into_str()?;
-                pipeline.terminals.push(TerminalMode::ReplaceFile(s));
-                return Ok(pipeline);
+                let t = res.into_str()?;
+                pipeline.terminals.push(TerminalMode::ReplaceFile(t));
+                if in_done { return Ok(pipeline); }
+                else { s = PRS::TerminalDone; out_done = true; }
             },
             PRS::OutAppendFile => {
                 let tok = if let Some(tok) = tok { tok }
@@ -785,9 +798,10 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 
                 // evaluate the token and try converting to a string
                 let res = tok.evaluate(&::environment::empty())?;
-                let s = res.into_str()?;
-                pipeline.terminals.push(TerminalMode::AppendFile(s));
-                return Ok(pipeline);
+                let t = res.into_str()?;
+                pipeline.terminals.push(TerminalMode::AppendFile(t));
+                if in_done { return Ok(pipeline); }
+                else { s = PRS::TerminalDone; out_done = true; }
             },
             PRS::OutReplaceVar => {
                 let tok = if let Some(tok) = tok { tok }
@@ -795,7 +809,8 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 
                 if let Some(sym) = tok.get_symbol()? {
                     pipeline.terminals.push(TerminalMode::SetVariable(sym));
-                    return Ok(pipeline);
+                    if in_done { return Ok(pipeline); }
+                    else { s = PRS::TerminalDone; out_done = true; }
                 } else {
                     return Err(ParseError::Syntax(
                             "expected symbol as output target"));
@@ -807,7 +822,8 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 
                 if let Some(sym) = tok.get_symbol()? {
                     pipeline.terminals.push(TerminalMode::AppendVariable(sym));
-                    return Ok(pipeline);
+                    if in_done { return Ok(pipeline); }
+                    else { s = PRS::TerminalDone; out_done = true; }
                 } else {
                     return Err(ParseError::Syntax(
                             "expected symbol as output target"));
@@ -819,9 +835,10 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 
                 // evaluate the token and try converting to a string
                 let res = tok.evaluate(&::environment::empty())?;
-                let s = res.into_str()?;
-                pipeline.terminals.push(TerminalMode::InputFile(s));
-                return Ok(pipeline);
+                let t = res.into_str()?;
+                pipeline.terminals.push(TerminalMode::InputFile(t));
+                if out_done { return Ok(pipeline); }
+                else { s = PRS::TerminalDone; in_done = true; }
             },
             PRS::InVar => {
                 let tok = if let Some(tok) = tok { tok }
@@ -829,10 +846,41 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                 
                 if let Some(sym) = tok.get_symbol()? {
                     pipeline.terminals.push(TerminalMode::InputVar(sym));
-                    return Ok(pipeline);
+                    if out_done { return Ok(pipeline); }
+                    else { s = PRS::TerminalDone; in_done = true; }
                 } else {
                     return Err(ParseError::Syntax(
                             "expected symbol as output target"));
+                }
+            },
+            PRS::TerminalDone => {
+                let tok = if let Some(tok) = tok { tok }
+                          else { return Ok(pipeline); };
+
+                if let Some(sym) = tok.get_symbol()? {
+                    let (out,st) =
+                        if sym.as_ref() == ">" {(true,PRS::OutReplaceFile)}
+                        else if sym.as_ref() == ">>" {(true,PRS::OutAppendFile)}
+                        else if sym.as_ref() == ">=" {(true,PRS::OutReplaceVar)}
+                        else if sym.as_ref() == ">>=" {(true,PRS::OutAppendVar)}
+                        else if sym.as_ref() == "<" {(false,PRS::InFile)}
+                        else if sym.as_ref() == "<=" {(false,PRS::InVar)}
+                        else {
+                            return Err(ParseError::Syntax(
+                                    "unexpected symbol in output position")); 
+                        };
+                    if out {
+                        if out_done { return Err(ParseError::Syntax(
+                                    "cannot specify two output targets")); }
+                        s = st;
+                    } else {
+                        if in_done { return Err(ParseError::Syntax(
+                                    "cannot specify two input targets")); }
+                        s = st;
+                    }
+                } else {
+                    return Err(ParseError::Syntax(
+                            "expected terminal or end of input"));
                 }
             },
         }
@@ -883,5 +931,92 @@ mod test {
             let r = read_number(&mut PeekReadChars::new(&mut Cursor::new(i)));
             assert_eq!(r.unwrap(), o);
         }
+    }
+
+    #[test]
+    fn identifiers() {
+        let cases = vec![
+            (&b"ident"[..], "ident"),
+            (&b"ident foo"[..], "ident"),
+        ];
+
+        for (i,o) in cases {
+            let r = read_identifier(
+                &mut PeekReadChars::new(&mut Cursor::new(&i[..])));
+            assert_eq!(r.unwrap(), Identifier::new(o));
+        }
+    }
+
+    #[test]
+    fn forms() {
+        let cases = vec![
+            (&b"ident foo"[..], Value::from(Identifier::new("ident"))),
+            (&b"12/4"[..], Value::from(Number::rational(12,4))),
+            (&b"+"[..], Value::from(Identifier::new("+"))),
+            (&b"\"st\\nr\\t\\\" t\\rest\""[..], Value::str("st\nr\t\" t\rest")),
+            (&b"()"[..], Value::list(vec![])),
+            (&b"(1 2)"[..], Value::list(vec![Value::from(Number::int(1)),
+                                             Value::from(Number::int(2))])),
+            (&b"|  "[..], Value::from(Identifier::new("|"))),
+            (&b"|> "[..], Value::from(Identifier::new("|>"))),
+            (&b"| > "[..], Value::from(Identifier::new("| >"))),
+            (&b"||> "[..], Value::from(Identifier::new("||>"))),
+            (&b"(true false)"[..], Value::list(vec![Value::from(true), Value::from(false)])),
+            (&b"$(+ x $)"[..], Value::list(vec![
+                Value::from(Identifier::new("fn")),
+                Value::list(vec![Value::from(Identifier::new("$"))]),
+                Value::list(vec![
+                    Value::from(Identifier::new("+")),
+                    Value::from(Identifier::new("x")),
+                    Value::from(Identifier::new("$"))])])),
+            (&b"$(+ $1    $3)"[..], Value::list(vec![
+                Value::from(Identifier::new("fn")),
+                Value::list(vec![Value::from(Identifier::new("$1")),
+                                 Value::from(Identifier::new("$2")),
+                                 Value::from(Identifier::new("$3"))]),
+                Value::list(vec![
+                    Value::from(Identifier::new("+")),
+                    Value::from(Identifier::new("$1")),
+                    Value::from(Identifier::new("$3"))])])),
+            (&b"'2"[..], Value::list(vec![Value::from(Identifier::new("quote")),
+                                          Value::from(Number::int(2))]))
+        ];
+
+        for (i,o) in cases {
+            let r = internal_read(
+                &mut PeekReadChars::new(&mut Cursor::new(&i[..])),
+                false);
+            assert_eq!(r.unwrap(), o);
+        }
+    }
+
+    #[test]
+    fn pipelines() {
+        let s = &b"1 bar | baz bax |> foo |~> bax > bar < foo"[..];
+        let r = read_pipeline(&mut Cursor::new(&s[..])).unwrap();
+        assert_eq!(r, Pipeline {
+            elements: vec![
+                PipelineComponent {
+                    xform: Transformer(vec![Value::from(Identifier::new("foo")),
+                                            Value::from(Identifier::new("bar"))]),
+                    link: Some(PipeMode::Pipe)
+                },
+                PipelineComponent {
+                    xform: Transformer(vec![Value::from(Identifier::new("baz")),
+                                            Value::from(Identifier::new("bax"))]),
+                    link: Some(PipeMode::PipeText)
+                },
+                PipelineComponent {
+                    xform: Transformer(vec![Value::from(Identifier::new("foo"))]),
+                    link: Some(PipeMode::DelimitedPipe('~'))
+                },
+                PipelineComponent {
+                    xform: Transformer(vec![Value::from(Identifier::new("bax"))]),
+                    link: None
+                },
+            ],
+            terminals: vec![TerminalMode::ReplaceFile(String::from("bar")),
+                            TerminalMode::InputFile(String::from("foo"))]
+        });
     }
 }
