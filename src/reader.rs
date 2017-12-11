@@ -705,7 +705,6 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
                      ParseError::UnexpectedEOF => Ok(None),
                      e => Err(e)
                  })?;
-        println!("({:?}){:?}", s, tok);
 
         match s {
             PRS::S => {
@@ -992,7 +991,7 @@ mod test {
 
     #[test]
     fn pipelines() {
-        let s = &b"1 bar | baz bax |> foo |~> bax > bar < foo"[..];
+        let s = &b"foo bar | baz bax |> foo |~> bax > bar < foo"[..];
         let r = read_pipeline(&mut Cursor::new(&s[..])).unwrap();
         assert_eq!(r, Pipeline {
             elements: vec![

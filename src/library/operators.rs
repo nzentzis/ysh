@@ -225,3 +225,148 @@ pub fn initialize() {
 
     env.set("inc", Value::from(Executable::native(fn_inc)));
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn add() {
+        let e = empty();
+        assert_eq!(fn_add(&e, &[Value::from(Number::int(2)),
+                                Value::from(Number::int(3))]).unwrap(),
+                   Value::from(Number::int(5)));
+        assert!(fn_add(&e, &[Value::from(Number::int(2)),
+                             Value::str("test")]).is_err());
+    }
+
+    #[test]
+    fn mul() {
+        let e = empty();
+        assert_eq!(fn_mul(&e, &[Value::from(Number::int(2)),
+                                Value::from(Number::int(3))]).unwrap(),
+                   Value::from(Number::int(6)));
+        assert!(fn_mul(&e, &[Value::from(Number::int(2)),
+                             Value::str("test")]).is_err());
+    }
+
+    #[test]
+    fn sub() {
+        let e = empty();
+        assert_eq!(fn_sub(&e, &[Value::from(Number::int(3)),
+                                Value::from(Number::int(2))]).unwrap(),
+                   Value::from(Number::int(1)));
+        assert_eq!(fn_sub(&e, &[Value::from(Number::int(3))]).unwrap(),
+                   Value::from(Number::int(-3)));
+        assert!(fn_sub(&e, &[]).is_err()); // arity
+        assert!(fn_sub(&e, &[Value::str("test")]).is_err());
+        assert!(fn_sub(&e, &[Value::str("test"), Value::str("foo")]).is_err());
+        assert!(fn_sub(&e, &[Value::from(Number::int(1)),
+                             Value::str("foo")]).is_err());
+    }
+
+    #[test]
+    fn div() {
+        let e = empty();
+        assert_eq!(fn_div(&e, &[Value::from(Number::int(3)),
+                                Value::from(Number::int(2))]).unwrap(),
+                   Value::from(Number::rational(3,2)));
+        assert!(fn_div(&e, &[Value::str("foo"),
+                             Value::from(Number::int(2))]).is_err());
+        assert!(fn_div(&e, &[Value::from(Number::int(2)),
+                             Value::str("foo")]).is_err());
+        assert!(fn_div(&e, &[Value::from(Number::int(2))]).is_err());
+    }
+
+    #[test]
+    fn inc() {
+        let e = empty();
+        assert_eq!(fn_inc(&e, &[Value::from(Number::int(2))]).unwrap(),
+                   Value::from(Number::int(3)));
+        assert_eq!(fn_inc(&e, &[Value::from(Number::int(2)),
+                                Value::from(Number::int(3))]).unwrap(),
+                   Value::list(vec![Value::from(Number::int(3)),
+                                    Value::from(Number::int(4))]));
+        assert!(fn_inc(&e, &[Value::str("foo")]).is_err());
+    }
+
+    #[test]
+    fn equality() {
+        let e = empty();
+        assert_eq!(fn_equal(&e, &[Value::from(Number::int(2)),
+                                  Value::from(Number::int(2))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(fn_equal(&e, &[Value::from(Number::int(2)),
+                                  Value::from(Number::int(3))]).unwrap(),
+                   Value::from(false));
+        assert_eq!(fn_equal(&e, &[Value::str("test"),
+                                  Value::from(Number::int(3))]).unwrap(),
+                   Value::from(false));
+        assert!(fn_equal(&e, &[]).is_err());
+
+        let v = fn_equal(&e, &[Value::from(Number::int(2))]).unwrap();
+        assert!(v.execute(&e, &[]).is_err());
+        assert_eq!(v.execute(&e, &[Value::from(Number::int(2))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(v.execute(&e, &[Value::from(Number::int(3))]).unwrap(),
+                   Value::from(false));
+        assert_eq!(v.execute(&e, &[Value::str("foo")]).unwrap(),
+                   Value::from(false));
+    }
+
+    #[test]
+    fn type_queries() {
+        let e = empty();
+        assert_eq!(int_q(&e, &[]).unwrap(),
+                   Value::from(true));
+        assert_eq!(int_q(&e, &[Value::from(Number::int(1))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(int_q(&e, &[Value::from(Number::int(1)),
+                               Value::from(Number::real(1.5))]).unwrap(),
+                   Value::from(false));
+
+        assert_eq!(rational_q(&e, &[]).unwrap(),
+                   Value::from(true));
+        assert_eq!(rational_q(&e, &[Value::from(Number::rational(1,2))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(rational_q(&e, &[Value::from(Number::rational(1,2)),
+                                    Value::from(Number::real(1.5))]).unwrap(),
+                   Value::from(false));
+
+        assert_eq!(real_q(&e, &[]).unwrap(),
+                   Value::from(true));
+        assert_eq!(real_q(&e, &[Value::from(Number::real(1.5))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(real_q(&e, &[Value::from(Number::int(1)),
+                               Value::from(Number::real(1.5))]).unwrap(),
+                   Value::from(false));
+
+        assert_eq!(complex_q(&e, &[]).unwrap(),
+                   Value::from(true));
+        assert_eq!(complex_q(&e, &[Value::from(Number::complex(1.,1.))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(complex_q(&e, &[Value::from(Number::complex(1.,1.)),
+                               Value::from(Number::real(1.5))]).unwrap(),
+                   Value::from(false));
+    }
+
+    #[test]
+    fn comparison() {
+        let e = empty();
+        assert_eq!(fn_lt(&e, &[]).unwrap(),
+                   Value::from(true));
+        assert_eq!(fn_gt(&e, &[Value::from(Number::int(1)),
+                               Value::from(Number::int(2))]).unwrap(),
+                   Value::from(false));
+        assert_eq!(fn_gt(&e, &[Value::from(Number::int(2)),
+                               Value::from(Number::int(2)),
+                               Value::from(Number::int(1))]).unwrap(),
+                   Value::from(false));
+        assert_eq!(fn_le(&e, &[Value::from(Number::int(1)),
+                               Value::from(Number::int(2))]).unwrap(),
+                   Value::from(true));
+        assert_eq!(fn_ge(&e, &[Value::from(Number::int(2)),
+                               Value::from(Number::int(1))]).unwrap(),
+                   Value::from(true));
+    }
+}
