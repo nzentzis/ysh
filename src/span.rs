@@ -683,6 +683,14 @@ impl LazyReadStream {
         LazyReadStream::new_from_source(ReadSource::stdin())
     }
 
+    /// Create a read stream for an arbitrary source type
+    pub fn from_reader<R: Read+Send+'static>(rd: R) -> io::Result<Self> {
+        LazyReadStream::new_from_source(ReadSource::FromReadBox {
+            r: Box::new(rd),
+            offs: 0
+        })
+    }
+
     /// Get the current chunk
     /// 
     /// If it's not populated, this will read data into the stream
@@ -828,7 +836,7 @@ mod test {
     #[test]
     fn stream_chunks() {
         let test = b"test data!";
-        let mut r = Cursor::new(test);
+        let r = Cursor::new(test);
         let mut strm = ReadSource::FromReadBox {
             r: Box::new(r),
             offs: 0 };

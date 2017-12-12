@@ -215,12 +215,14 @@ impl PolyLine {
             let mut last_idx = 0;
             for (i,c) in span.chars().enumerate() {
                 last_idx = i;
+                println!("{:?} {} '{}'", state, i, c);
                 match state {
                     FieldSplitState::Start => {
                         if c == ' ' {
                             // if the first char is a space, bias left
                             bias = true;
                             lspace += 1;
+                            state = FieldSplitState::LeftBlanks;
                         } else {
                             state = FieldSplitState::ReadData;
                             length += 1;
@@ -261,8 +263,8 @@ impl PolyLine {
                                                     lspace,
                                                     length,
                                                     rspace,
-                                                    i));
-                                start_idx = i;
+                                                    i-1));
+                                start_idx = i+1;
                                 lspace = 0; rspace = 0; length = 0;
                                 state = FieldSplitState::LeftBlanks;
                             } else {
@@ -287,11 +289,17 @@ impl PolyLine {
                                                 i-1));
                             start_idx = i;
                             lspace = 0; length = 0; rspace = 0;
+                            state = FieldSplitState::ReadData;
                         }
                     },
                 }
             }
-            field_regions.push((start_idx, lspace, length, rspace, last_idx+1));
+            let end_idx = match state {
+                FieldSplitState::CheckSep => last_idx,
+                _ => last_idx+1,
+            };
+            field_regions.push((start_idx, lspace, length, rspace, end_idx));
+            println!("{:?}", field_regions);
         } else {
             let mut state = FieldSplitState::LeftBlanks;
             let mut start_idx = 0;
@@ -469,5 +477,69 @@ impl ValueLike for PolyField {
 
     fn first(&self) -> Eval<Option<Value>> {
         Ok(Some(Value::new(self.to_owned())))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::io::Cursor;
+
+    fn mk_stream(data: &'static [u8]) -> LazyReadStream {
+        LazyReadStream::from_reader(Cursor::new(data)).unwrap()
+    }
+
+    #[test]
+    fn line_simple() {
+        let l_data = "1234 abcd 1.24 6-7i ";
+        let mut strm = mk_stream(l_data.as_bytes());
+
+        let mut s1 = strm.read(26).unwrap();
+        while !s1.is_frozen() { strm.extend(&mut s1, 8).unwrap(); }
+
+        let opts = StreamOptions::new();
+        let l = PolyLine::new_from(s1, opts);
+
+        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_iter()
+                    .map(|x| x.and_then(|v| v.into_str()))
+                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    vec!["1234", "abcd", "1.24", "6-7i"]);
+    }
+
+    #[test]
+    fn line_left_padded() {
+        let l_data = "    1234    abcd    1.24    6-7i ";
+        let mut strm = mk_stream(l_data.as_bytes());
+
+        let mut s1 = strm.read(26).unwrap();
+        while !s1.is_frozen() { strm.extend(&mut s1, 8).unwrap(); }
+
+        let opts = StreamOptions::new();
+        let l = PolyLine::new_from(s1, opts);
+
+        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_iter()
+                    .map(|x| x.and_then(|v| v.into_str()))
+                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    vec!["1234", "abcd", "1.24", "6-7i"]);
+    }
+
+    #[test]
+    fn line_right_padded() {
+        let l_data = "1234    abcd    1.24    6-7i";
+        let mut strm = mk_stream(l_data.as_bytes());
+
+        let mut s1 = strm.read(26).unwrap();
+        while !s1.is_frozen() { strm.extend(&mut s1, 8).unwrap(); }
+
+        let opts = StreamOptions::new();
+        let l = PolyLine::new_from(s1, opts);
+
+        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_iter()
+                    .map(|x| x.and_then(|v| v.into_str()))
+                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    vec!["1234", "abcd", "1.24", "6-7i"]);
     }
 }
