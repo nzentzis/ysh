@@ -215,7 +215,6 @@ impl PolyLine {
             let mut last_idx = 0;
             for (i,c) in span.chars().enumerate() {
                 last_idx = i;
-                println!("{:?} {} '{}'", state, i, c);
                 match state {
                     FieldSplitState::Start => {
                         if c == ' ' {
@@ -299,7 +298,6 @@ impl PolyLine {
                 _ => last_idx+1,
             };
             field_regions.push((start_idx, lspace, length, rspace, end_idx));
-            println!("{:?}", field_regions);
         } else {
             let mut state = FieldSplitState::LeftBlanks;
             let mut start_idx = 0;
