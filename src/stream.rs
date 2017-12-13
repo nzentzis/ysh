@@ -542,4 +542,23 @@ mod test {
                     .collect::<Eval<Vec<_>>>().unwrap(),
                     vec!["1234", "abcd", "1.24", "6-7i"]);
     }
+
+    #[test]
+    fn separated_simple() {
+        let l_data = "1234|abcd|1.24|6-7i";
+        let mut strm = mk_stream(l_data.as_bytes());
+
+        let mut s1 = strm.read(26).unwrap();
+        while !s1.is_frozen() { strm.extend(&mut s1, 8).unwrap(); }
+
+        let mut opts = StreamOptions::new();
+        opts.delimiter('|');
+        let l = PolyLine::new_from(s1, opts);
+
+        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_iter()
+                    .map(|x| x.and_then(|v| v.into_str()))
+                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    vec!["1234", "abcd", "1.24", "6-7i"]);
+    }
 }
