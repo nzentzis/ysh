@@ -41,7 +41,22 @@ semantics as 'do'.");
     static ref DOC_FN: Documentation = Documentation::new()
         .form(&["(args*)", "body*"])
         .form(&["((args0*) body0*)", "((args1*) body1*)", "..."])
-        .desc("Create a function.");
+        .short("Create an anonymous function.");
+    
+    static ref DOC_QUOTE: Documentation = Documentation::new()
+        .form(&["form"])
+        .form(&["(forms*)"])
+        .short("Return passed forms without evaluating them")
+        .desc("If more than one form is passed, a list will be created from \
+               all passed forms and `quote` will return that.");
+
+    static ref DOC_DEFN: Documentation = Documentation::new()
+        .form(&["sym", "(args*)", "body*"])
+        .form(&["sym", "((args0*) body0*)", "((args1*) body1*)", "..."])
+        .short("Create a named function in the global namespace")
+        .desc("Generates a function using all arguments after the first, then \
+               stores it in the first symbol. Function creation works as with \
+               `fn` and definition works as with `def`.");
 }
 
 /// if the first arg is truthy, evaluate and yield the second arg. Otherwise,
@@ -446,12 +461,14 @@ pub fn initialize() {
                               .document(&DOC_IF));
 
     // macros and quoting
-    env.set_immut("quote", Value::from(Executable::CoreFn(core_quote)));
+    env.set_immut("quote", Value::from(Executable::CoreFn(core_quote))
+                                     .document(&DOC_QUOTE));
     env.set_immut("defmacro", Value::from(Executable::CoreFn(core_defmacro)));
     env.set_immut("macroexpand", Value::from(Executable::CoreFn(core_macroexpand)));
 
     // utilities
-    env.set("defn", Value::from(Executable::CoreFn(core_defn)));
+    env.set("defn", Value::from(Executable::CoreFn(core_defn))
+                          .document(&DOC_DEFN));
     env.set("eval", Value::from(Executable::native(core_eval)));
     env.set("doc", Value::from(Executable::native(fn_man)))
 }
