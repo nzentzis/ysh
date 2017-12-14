@@ -177,6 +177,7 @@ pub enum ValueData {
 #[derive(Debug)]
 pub struct Documentation {
     pub origin: Option<&'static str>,
+    pub short_desc: Option<&'static str>,
     pub description: Option<&'static str>,
     pub forms: Vec<&'static [&'static str]>
 }
@@ -184,7 +185,12 @@ pub struct Documentation {
 impl Documentation {
     /// Generate a new, empty, documentation object
     pub fn new() -> Documentation {
-        Documentation { origin: None, description: None, forms: vec![] }
+        Documentation {
+            origin: None,
+            short_desc: None,
+            description: None,
+            forms: vec![]
+        }
     }
 
     /// Modify the origin of a documentation object
@@ -198,6 +204,14 @@ impl Documentation {
     /// The passed text may be word-wrapped at arbitrary boundaries.
     pub fn desc(mut self, description: &'static str) -> Self {
         self.description = Some(description);
+        self
+    }
+
+    /// Modify the short description of a documentation object
+    ///
+    /// The passed text may be word-wrapped at arbitrary boundaries
+    pub fn short(mut self, short: &'static str) -> Self {
+        self.short_desc = Some(short);
         self
     }
 

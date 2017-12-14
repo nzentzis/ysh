@@ -10,6 +10,38 @@ lazy_static! {
         .desc("Evaluates test. If the result is truthy, evaluate then and \
                return the result. Otherwise, evaluate and return else if it's \
                provided and () if not.");
+
+    static ref DOC_DEF: Documentation = Documentation::new()
+        .form(&["sym"])
+        .form(&["sym", "value"])
+        .short("Create or retrieve global symbol bindings")
+        .desc("With 1 argument, returns the value bound to sym if one exists \
+               and returns () otherwise.\n \
+               With 2 arguments, evaluates value and modifies the global \
+               environment binding the result to sym.");
+
+    static ref DOC_DO: Documentation = Documentation::new()
+        .form(&["forms*"])
+        .short("Evaluate the passed forms in order and return the last value");
+
+    static ref DOC_LET: Documentation = Documentation::new()
+        .form(&["(id0 val0 id1 val1...)", "forms*"])
+        .short("Evaluate the passed forms in a modified lexical environment.")
+        .desc("\
+The first argument is a list of bindings which are applied in the order
+provided. This means later bindings can reference the value of earlier ones. For
+example:
+
+    $ (let (x 1 y (+ 2 x)) (+ y x))
+    4
+
+If more than one inner form is given, they are evaluated in order using the same
+semantics as 'do'.");
+
+    static ref DOC_FN: Documentation = Documentation::new()
+        .form(&["(args*)", "body*"])
+        .form(&["((args0*) body0*)", "((args1*) body1*)", "..."])
+        .desc("Create a function.");
 }
 
 /// if the first arg is truthy, evaluate and yield the second arg. Otherwise,
@@ -348,43 +380,13 @@ fn core_defn(lex: &Environment, args: &[Value]) -> EvalResult {
 
 /// Render and display a documentation object
 fn render_doc(d: &Documentation) {
-    use termion::{style, terminal_size};
-    use std::io::prelude::*;
     use std::io;
-
-    let (w,h) = terminal_size().unwrap_or((80,25));
+    use docs::DocFormat;
     let out = io::stdout();
     let mut out_lock = out.lock();
 
-    if let Some(o) = d.origin {
-        // render origin centered
-        writeln!(out_lock, "{:^width$}", o, width=w as usize).unwrap();
-    }
-
-    for f in d.forms.iter() {
-        writeln!(out_lock, "({})", f.join(" ")).unwrap()
-    }
-
-    if let Some(d) = d.description {
-        let line_max = w as usize;
-
-        // perform word wrapping
-        let mut words = Vec::with_capacity(w as usize);
-        let mut line_len = 0;
-        for w in d.split(' ') {
-            if line_len + w.len() >= line_max {
-                writeln!(out_lock, "{}", words.join(" ")).unwrap();
-                words.truncate(0);
-                line_len = 0;
-            }
-
-            line_len += w.len() + 1;
-            words.push(w);
-        }
-        if !words.is_empty() {
-            writeln!(out_lock, "{}", words.join(" ")).unwrap();
-        }
-    }
+    let fmt = DocFormat::new();
+    fmt.render(d, &mut out_lock).expect("failed to render docs");
 }
 
 /// Utility function to look up and format documentation
@@ -433,13 +435,15 @@ pub fn initialize() {
 
     // special forms
     env.set_immut("fn", Value::from(Executable::CoreFn(core_fn))
-                              );
-    env.set_immut("let", Value::from(Executable::CoreFn(core_let)));
-    env.set_immut("def", Value::from(Executable::CoreFn(core_def)));
-    env.set_immut("do", Value::from(Executable::CoreFn(core_do)));
+                              .document(&DOC_FN));
+    env.set_immut("let", Value::from(Executable::CoreFn(core_let))
+                               .document(&DOC_LET));
+    env.set_immut("def", Value::from(Executable::CoreFn(core_def))
+                               .document(&DOC_DEF));
+    env.set_immut("do", Value::from(Executable::CoreFn(core_do))
+                              .document(&DOC_DO));
     env.set_immut("if", Value::from(Executable::CoreFn(core_if))
                               .document(&DOC_IF));
-
 
     // macros and quoting
     env.set_immut("quote", Value::from(Executable::CoreFn(core_quote)));

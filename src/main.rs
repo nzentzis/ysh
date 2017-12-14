@@ -4,20 +4,25 @@ extern crate termion;
 extern crate libc;
 extern crate nix;
 
-mod numeric;
-mod reader;
+// base modules
+#[macro_use] mod util;
 #[allow(dead_code)] mod data;
+mod numeric;
+
+// global namespace support and standard library
 #[allow(dead_code)] mod globals;
 #[allow(dead_code)] mod environment;
-
+mod docs;
 mod library;
 
+// input & user interaction
+mod reader;
 #[allow(dead_code)] mod stream;
 #[allow(dead_code)] mod span;
-
 #[allow(dead_code)] mod editor;
 mod input;
 
+// runtime control and management
 #[allow(dead_code)] mod jobs;
 mod evaluate;
 #[allow(dead_code)] mod pipeline;
