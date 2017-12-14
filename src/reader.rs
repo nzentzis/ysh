@@ -404,6 +404,10 @@ pub fn parse_number(x: &[u8]) -> Parse<Number> {
     read_number(&mut PeekReadChars::new(&mut Cursor::new(x)))
 }
 
+fn valid_identifier_char(c: char) -> bool {
+    c != '(' && c != ')' && !c.is_whitespace()
+}
+
 fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
     let c = peek.next()?;
 
@@ -419,7 +423,7 @@ fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
         // stop the ident if we hit EOF
         let c = if let Some(c) = c { c } else { break };
 
-        if c != '(' && c != ')' && !c.is_whitespace() {
+        if valid_identifier_char(c) {
             s.push(c);
             peek.next()?;
         } else {
@@ -591,6 +595,15 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                         peek.push(fwd);
                         Value::from(Identifier::from(format!("|")))
                     }
+                }
+            } else if c == ':' { // read atom if followed by something
+                let c = peek.next()?;
+                let id = read_identifier(peek)?;
+
+                if valid_identifier_char(c) {
+                    Value::atom(id.0.as_ref())
+                } else {
+                    Value::from(id)
                 }
             } else {
                 let id = read_identifier(peek)?;

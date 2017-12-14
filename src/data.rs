@@ -1,6 +1,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::boxed::Box;
+use std::collections::HashMap;
 
 use environment::Environment;
 use numeric::*;
@@ -167,6 +168,7 @@ pub enum ValueData {
     Number(Number),
     Str(String),
     Symbol(Identifier),
+    Atom(Arc<String>), // TODO: add interning
     List(Vec<Value>),
     Function(Executable),
     Macro(Executable),
@@ -273,6 +275,15 @@ impl Value {
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
         Value {
             data: ValueData::Str(s.borrow().to_owned()),
+            name: None,
+            doc: None
+        }
+    }
+
+    /// Build an atom
+    pub fn atom<S: AsRef<str>>(s: S) -> Value {
+        Value {
+            data: ValueData::Atom(Arc::new(String::from(s.as_ref()))),
             name: None,
             doc: None
         }
@@ -397,6 +408,7 @@ impl ValueLike for Value {
             &ValueData::Number(ref n)       => Ok(format!("{}", n)),
             &ValueData::Str(ref s)          => Ok(s.to_owned()),
             &ValueData::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
+            &ValueData::Atom(ref a)         => Ok(format!(":{}", a)),
             &ValueData::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
@@ -432,6 +444,7 @@ impl ValueLike for Value {
             &ValueData::Number(ref n)       => Ok(n.round() != 0),
             &ValueData::Str(ref s)          => Ok(!s.is_empty()),
             &ValueData::Symbol(_)           => Ok(true),
+            &ValueData::Atom(_)             => Ok(true),
             &ValueData::List(ref l) => Ok(
                 if l.is_empty() { false }
                 else { l.iter().map(|x| x.into_bool())
@@ -488,14 +501,9 @@ impl ValueLike for Value {
 
     fn is_executable(&self) -> bool {
         match &self.data {
-            &ValueData::Boolean(_)         => false,
-            &ValueData::Number(_)          => false,
-            &ValueData::Str(_)             => false,
-            &ValueData::Symbol(_)          => false,
-            &ValueData::List(_)            => false,
             &ValueData::Function(_)        => true,
-            &ValueData::Macro(_)           => false,
-            &ValueData::Polymorphic(ref v) => v.is_executable()
+            &ValueData::Polymorphic(ref v) => v.is_executable(),
+            _                              => false
         }
     }
 
@@ -512,14 +520,9 @@ impl ValueLike for Value {
 
     fn first(&self) -> Eval<Option<Value>> {
         match &self.data {
-            &ValueData::Boolean(_)         => Ok(Some(self.clone())),
-            &ValueData::Number(_)          => Ok(Some(self.clone())),
-            &ValueData::Str(_)             => Ok(Some(self.clone())),
-            &ValueData::Symbol(_)          => Ok(Some(self.clone())),
             &ValueData::List(ref v)        => Ok(v.first().map(|x| x.clone())),
-            &ValueData::Function(_)        => Ok(Some(self.clone())),
-            &ValueData::Macro(_)           => Ok(Some(self.clone())),
-            &ValueData::Polymorphic(ref v) => v.first()
+            &ValueData::Polymorphic(ref v) => v.first(),
+            _                              => Ok(Some(self.clone()))
         }
     }
 }
@@ -661,6 +664,7 @@ impl fmt::Debug for ValueData {
             &ValueData::Number(ref n)  => write!(f, "<num:{}>", n),
             &ValueData::Str(ref s)     => write!(f, "<str:\"{}\">", s),
             &ValueData::Symbol(ref s)  => write!(f, "<sym:{}>", s.0),
+            &ValueData::Atom(ref s)    => write!(f, "<atom:{}>", s),
             &ValueData::List(ref v)    => write!(f, "{:?}", v),
             &ValueData::Function(_)    => write!(f, "<function>"),
             &ValueData::Macro(_)       => write!(f, "<macro>"),

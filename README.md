@@ -10,7 +10,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     -[ ] Hashmap type
     -[ ] Arbitrary-precision arithmetic support in numeric tower
     -[ ] Guaranteed tail-call optimization
-    -[ ] Atoms
+    -[X] Atoms
     -[ ] Symbol/atom interning
     -[ ] Exceptions and handling
     -[ ] Use persistent data structures in place of native Vec
