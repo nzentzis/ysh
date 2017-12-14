@@ -70,38 +70,44 @@ impl DocFormat {
         }
     }
 
+    #[allow(dead_code)]
     /// Disable word wrapping
     pub fn no_wrap(&mut self) -> &mut Self {
         self.word_wrap = false;
         self
     }
 
+    #[allow(dead_code)]
     /// Enable word wrapping
     pub fn wrap(&mut self) -> &mut Self {
         self.word_wrap = true;
         self
     }
 
+    #[allow(dead_code)]
     /// Set whether to use format codes
     pub fn format(&mut self, e: bool) -> &mut Self {
         self.word_wrap = e;
         self
     }
 
+    #[allow(dead_code)]
     /// Unset the rendering target width
     pub fn no_width(&mut self) -> &mut Self {
         self.width = None;
         self
     }
 
+    #[allow(dead_code)]
     /// Set the rendering target width
     pub fn width(&mut self, w: usize) -> &mut Self {
         self.width = Some(w);
         self
     }
 
+    #[allow(dead_code)]
     /// Render a documentation object to a string
-    pub fn render_str(&self, doc: &Documentation) -> String {
+    pub fn render_str(&self, _doc: &Documentation) -> String {
         unimplemented!()
     }
 
