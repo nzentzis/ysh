@@ -174,26 +174,66 @@ pub enum ValueData {
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
+#[derive(Debug)]
+pub struct Documentation {
+    pub origin: Option<&'static str>,
+    pub description: Option<&'static str>,
+    pub forms: Vec<&'static [&'static str]>
+}
+
+impl Documentation {
+    /// Generate a new, empty, documentation object
+    pub fn new() -> Documentation {
+        Documentation { origin: None, description: None, forms: vec![] }
+    }
+
+    /// Modify the origin of a documentation object
+    pub fn origin(mut self, origin: &'static str) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
+    /// Modify the description of a documentation object
+    /// 
+    /// The passed text may be word-wrapped at arbitrary boundaries.
+    pub fn desc(mut self, description: &'static str) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    /// Add a new form
+    pub fn form(mut self, form: &'static [&'static str]) -> Self {
+        self.forms.push(form);
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Value {
     pub data: ValueData,
     pub name: Option<Identifier>,
+    pub doc: Option<&'static Documentation>
 }
 
 impl Value {
     /// Change the value's name
-    pub fn rename(self, name: Identifier) -> Value {
-        Value {
-            data: self.data,
-            name: Some(name)
-        }
+    pub fn rename(mut self, name: Identifier) -> Value {
+        self.name = Some(name);
+        self
+    }
+
+    /// Add documentation to a value
+    pub fn document(mut self, doc: &'static Documentation) -> Value {
+        self.doc = Some(doc);
+        self
     }
 
     /// Generate an empty value
     pub fn empty() -> Value {
         Value {
             data: ValueData::List(Vec::new()),
-            name: None
+            name: None,
+            doc: None
         }
     }
 
@@ -201,7 +241,8 @@ impl Value {
     pub fn new<T: ValueLike+'static>(x: T) -> Value {
         Value {
             data: ValueData::Polymorphic(Arc::new(x)),
-            name: None
+            name: None,
+            doc: None
         }
     }
 
@@ -209,7 +250,8 @@ impl Value {
     pub fn list<I: IntoIterator<Item=Value>>(i: I) -> Value {
         Value {
             data: ValueData::List(i.into_iter().collect()),
-            name: None
+            name: None,
+            doc: None
         }
     }
 
@@ -217,7 +259,8 @@ impl Value {
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
         Value {
             data: ValueData::Str(s.borrow().to_owned()),
-            name: None
+            name: None,
+            doc: None
         }
     }
 
@@ -262,7 +305,8 @@ impl From<Executable> for Value {
     fn from(e: Executable) -> Value {
         Value {
             data: ValueData::Function(e),
-            name: None
+            name: None,
+            doc: None
         }
     }
 }
@@ -271,7 +315,8 @@ impl From<Number> for Value {
     fn from(n: Number) -> Value {
         Value {
             data: ValueData::Number(n),
-            name: None
+            name: None,
+            doc: None
         }
     }
 }
@@ -280,7 +325,8 @@ impl From<Identifier> for Value {
     fn from(i: Identifier) -> Value {
         Value {
             data: ValueData::Symbol(i),
-            name: None
+            name: None,
+            doc: None
         }
     }
 }
@@ -289,7 +335,8 @@ impl From<bool> for Value {
     fn from(x: bool) -> Value {
         Value {
             data: ValueData::Boolean(x),
-            name: None
+            name: None,
+            doc: None
         }
     }
 }

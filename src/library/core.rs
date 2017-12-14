@@ -3,6 +3,15 @@ use std::sync::Arc;
 use environment::*;
 use data::*;
 
+lazy_static! {
+    static ref DOC_IF: Documentation = Documentation::new()
+        .form(&["test", "then"])
+        .form(&["test", "then", "else"])
+        .desc("Evaluates test. If the result is truthy, evaluate then and \
+               return the result. Otherwise, evaluate and return else if it's \
+               provided and () if not.");
+}
+
 /// if the first arg is truthy, evaluate and yield the second arg. Otherwise,
 /// yield the third arg if present and () otherwise
 fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
@@ -337,15 +346,99 @@ fn core_defn(lex: &Environment, args: &[Value]) -> EvalResult {
     core_def(lex, &[name, v])
 }
 
+/// Render and display a documentation object
+fn render_doc(d: &Documentation) {
+    use termion::{style, terminal_size};
+    use std::io::prelude::*;
+    use std::io;
+
+    let (w,h) = terminal_size().unwrap_or((80,25));
+    let out = io::stdout();
+    let mut out_lock = out.lock();
+
+    if let Some(o) = d.origin {
+        // render origin centered
+        writeln!(out_lock, "{:^width$}", o, width=w as usize).unwrap();
+    }
+
+    for f in d.forms.iter() {
+        writeln!(out_lock, "({})", f.join(" ")).unwrap()
+    }
+
+    if let Some(d) = d.description {
+        let line_max = w as usize;
+
+        // perform word wrapping
+        let mut words = Vec::with_capacity(w as usize);
+        let mut line_len = 0;
+        for w in d.split(' ') {
+            if line_len + w.len() >= line_max {
+                writeln!(out_lock, "{}", words.join(" ")).unwrap();
+                words.truncate(0);
+                line_len = 0;
+            }
+
+            line_len += w.len() + 1;
+            words.push(w);
+        }
+        if !words.is_empty() {
+            writeln!(out_lock, "{}", words.join(" ")).unwrap();
+        }
+    }
+}
+
+/// Utility function to look up and format documentation
+/// 
+/// This should be renamed `man` and delegate to the system's man command when
+/// support is available.
+fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 1 {
+        let x = &args[0];
+        if let Some(ref d) = x.doc {
+            render_doc(d);
+            return Ok(Value::empty());
+        } else if let Some(id) = x.get_symbol()? {
+            // try looking up the symbol to check docs for its value
+            if let Some(ref d) = env.get(id).and_then(|o| o.doc) {
+                render_doc(d);
+                return Ok(Value::empty());
+            }
+        }
+    }
+    Err(EvalError::Runtime(String::from("documentation not found")))
+
+    /*
+    // find man command
+    let cmd = ::evaluate::find_command("man");
+    let cmd = if let Some(cmd) = cmd { cmd }
+              else {
+                  return Err(EvalError::Runtime(
+                          String::from("cannot find system man command")));
+              };
+    if cmd.is_empty() {
+        return Err(EvalError::Runtime(
+                String::from("cannot find system man command")));
+    } else if cmd.len() > 1 {
+        return Err(EvalError::Runtime(
+                String::from("multiple man commands found")));
+    }
+
+    let pth = &cmd[0];
+    unimplemented!()
+    */
+}
+
 pub fn initialize() {
     let env = global();
 
     // special forms
-    env.set_immut("fn", Value::from(Executable::CoreFn(core_fn)));
+    env.set_immut("fn", Value::from(Executable::CoreFn(core_fn))
+                              );
     env.set_immut("let", Value::from(Executable::CoreFn(core_let)));
     env.set_immut("def", Value::from(Executable::CoreFn(core_def)));
     env.set_immut("do", Value::from(Executable::CoreFn(core_do)));
-    env.set_immut("if", Value::from(Executable::CoreFn(core_if)));
+    env.set_immut("if", Value::from(Executable::CoreFn(core_if))
+                              .document(&DOC_IF));
 
 
     // macros and quoting
@@ -356,6 +449,7 @@ pub fn initialize() {
     // utilities
     env.set("defn", Value::from(Executable::CoreFn(core_defn)));
     env.set("eval", Value::from(Executable::native(core_eval)));
+    env.set("doc", Value::from(Executable::native(fn_man)))
 }
 
 /// Generate a value with the passed args wrapped in a call to `quote`
