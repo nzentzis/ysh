@@ -142,12 +142,12 @@ impl DocFormat {
             } else {
                 writeln!(out, "{}\n", s)?;
             }
-        }
-
-        if let Some(d) = doc.description {
             if self.format_codes {
                 write!(out, "{}", style::Reset)?;
             }
+        }
+
+        if let Some(d) = doc.description {
             if let Some(w) = self.width {
                 let s = word_wrap(w, d);
                 writeln!(out, "{}", s)?;

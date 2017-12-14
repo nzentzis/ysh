@@ -2,6 +2,96 @@ use environment::*;
 use numeric::*;
 use data::*;
 
+lazy_static! {
+    static ref DOC_ADD: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["exprs*"])
+        .short("Return the sum of the passed values")
+        .desc("Evaluate the passed exprs and convert the results to numbers. \
+               Return the sum of all passed numbers, or 0 if called with no \
+               arguments.");
+
+    static ref DOC_MUL: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["exprs*"])
+        .short("Return the product of the passed values")
+        .desc("Evaluate the passed exprs and convert the results to numbers. \
+               Return the product of all passed numbers, or 1 if called with \
+               no arguments.");
+
+    static ref DOC_SUB: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr"])
+        .form(&["exprs+"])
+        .short("Subtract or negate values")
+        .desc("Evaluate the passed exprs and convert the results to numbers. \
+               If one argument is given, negate the value and return it.\n \
+               If more than one argument is given, subtract the later values \
+               from the first one and return the result.");
+
+    static ref DOC_DIV: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr expr"])
+        .short("Divide the first numeric value by the second");
+
+    static ref DOC_INC: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr"])
+        .form(&["exprs+"])
+        .short("Increment numeric value(s)")
+        .desc("With 1 argument, increment the value and return it. Otherwise, \
+               increment each argument and return them as a list.");
+
+    static ref DOC_EQUAL: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr"])
+        .form(&["expr expr"])
+        .short("Compare two values for equality")
+        .desc("With 1 argument, return a function of one argument which will \
+               return whether its input is equal to the original argument.\n \
+               With 2 arguments, return whether they are equal.");
+
+    static ref DOC_INTQ: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether all arguments are integers");
+
+    static ref DOC_RATIONALQ: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether all arguments are rationals");
+
+    static ref DOC_REALQ: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether all arguments are reals");
+
+    static ref DOC_COMPLEXQ: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether all arguments are complex numbers");
+
+    static ref DOC_LT: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether values are in monotonically increasing order");
+
+    static ref DOC_GT: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether values are in monotonically decreasing order");
+
+    static ref DOC_LE: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether values are in monotonically non-decreasing order");
+
+    static ref DOC_GE: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["expr*"])
+        .short("Return whether values are in monotonically non-increasing order");
+}
+
 fn fn_add(_: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut ns = Vec::new();
@@ -152,7 +242,7 @@ fn real_q(_: &Environment, args: &[Value]) -> EvalResult {
                        .unwrap_or(false)))
 }
 
-/// Return whether all passed arguments are complexs
+/// Return whether all passed arguments are complex
 fn complex_q(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().map(|x| x.into_num())
                        .collect::<Eval<Vec<_>>>()?.into_iter()
@@ -205,25 +295,28 @@ fn fn_ge(_: &Environment, args: &[Value]) -> EvalResult {
 
 pub fn initialize() {
     let env = global();
-    env.set("+", Value::from(Executable::native(fn_add)));
-    env.set("-", Value::from(Executable::native(fn_sub)));
-    env.set("*", Value::from(Executable::native(fn_mul)));
-    env.set("/", Value::from(Executable::native(fn_div)));
+    env.set("+", Value::from(Executable::native(fn_add)).document(&DOC_ADD));
+    env.set("-", Value::from(Executable::native(fn_sub)).document(&DOC_SUB));
+    env.set("*", Value::from(Executable::native(fn_mul)).document(&DOC_MUL));
+    env.set("/", Value::from(Executable::native(fn_div)).document(&DOC_DIV));
 
     // comparisons
-    env.set("=", Value::from(Executable::native(fn_equal)));
-    env.set("<", Value::from(Executable::native(fn_lt)));
-    env.set(">", Value::from(Executable::native(fn_gt)));
-    env.set("<=", Value::from(Executable::native(fn_le)));
-    env.set(">=", Value::from(Executable::native(fn_ge)));
+    env.set("=", Value::from(Executable::native(fn_equal)).document(&DOC_EQUAL));
+    env.set("<", Value::from(Executable::native(fn_lt)).document(&DOC_LT));
+    env.set(">", Value::from(Executable::native(fn_gt)).document(&DOC_GT));
+    env.set("<=", Value::from(Executable::native(fn_le)).document(&DOC_LE));
+    env.set(">=", Value::from(Executable::native(fn_ge)).document(&DOC_GE));
 
     // numeric type queries
-    env.set("int?", Value::from(Executable::native(int_q)));
-    env.set("rational?", Value::from(Executable::native(rational_q)));
-    env.set("real?", Value::from(Executable::native(real_q)));
-    env.set("complex?", Value::from(Executable::native(complex_q)));
+    env.set("int?", Value::from(Executable::native(int_q)).document(&DOC_INTQ));
+    env.set("rational?", Value::from(Executable::native(rational_q))
+                               .document(&DOC_RATIONALQ));
+    env.set("real?", Value::from(Executable::native(real_q))
+                           .document(&DOC_REALQ));
+    env.set("complex?", Value::from(Executable::native(complex_q))
+                              .document(&DOC_COMPLEXQ));
 
-    env.set("inc", Value::from(Executable::native(fn_inc)));
+    env.set("inc", Value::from(Executable::native(fn_inc)).document(&DOC_INC));
 }
 
 #[cfg(test)]
