@@ -47,7 +47,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     -[ ] Source elements
     -[ ] Stream parsing support
     -[ ] Pretty-printing output
-    -[ ] Automatic symbol globbing in command transformers
+    -[X] Automatic symbol globbing in command transformers
     [ ] Job control
     -[ ] Backgrounding jobs (via `&` or some other means)
     -[ ] Job control interface functions
