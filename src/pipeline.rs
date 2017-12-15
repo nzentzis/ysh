@@ -289,7 +289,6 @@ impl Plan {
 
         // execute all plan elements
         let mut job = Job::new();
-        let mut transforms = Vec::new();
         let mut plan_buffer = Vec::with_capacity(self.0.len());
         for (idx, element) in self.0.into_iter().enumerate() {
             match element {
@@ -304,13 +303,11 @@ impl Plan {
                         // generate a pipe
                         let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
                                            .expect("cannot generate pipes");
-                        let eval = TransformEvaluation::launch(
+                        let eval = TransformEvaluation::launch(&mut job,
                                         last_output, plan_buffer.drain(..),
                                         EvalOutput::Descriptor(i));
 
-                        if let Some(eval) = eval {
-                            transforms.push(eval);
-                        } else {
+                        if eval.is_none() {
                             // handle launch failure
                             // currently just close FDs and abort
                             // TODO: close non-stdin FDs here
@@ -416,19 +413,15 @@ impl Plan {
                 _                           => panic!("invalid plan terminator")
             };
 
-            let eval = TransformEvaluation::launch(
+            let eval = TransformEvaluation::launch(&mut job,
                 last_output, plan_buffer.drain(..), out);
-            if let Some(eval) = eval {
-                transforms.push(eval);
-            } else {
+            if eval.is_none() {
                 // TODO close output FDs here
                 return None;
             }
         }
 
-        Some(ActivePipeline { job,
-            xforms: transforms
-        })
+        Some(ActivePipeline { job })
     }
 }
 
@@ -514,10 +507,9 @@ impl TransformEvaluation {
         }
     }
 
-    fn launch<I>(input: RawFd, elements: I, output: EvalOutput)
-            -> Option<TransformHandle>
+    fn launch<I>(job: &mut Job, input: RawFd, elements: I, output: EvalOutput)
+            -> Option<()>
             where I: IntoIterator<Item=PlanElement> {
-        use std::thread;
         use std::io::prelude::*;
 
         let mut elements = elements.into_iter();
@@ -552,7 +544,7 @@ impl TransformEvaluation {
 
         // launch the transform
         let out = output;
-        let hdl = thread::spawn(move || {
+        job.spawn(move || {
             // TODO: error handling
             let res = expr.evaluate(&::environment::empty());
             let res = match res {
@@ -586,32 +578,19 @@ impl TransformEvaluation {
                 }
             }
         });
-
-        Some(TransformHandle {
-            handle: hdl
-        })
+        Some(())
     }
-}
-
-struct TransformHandle {
-    handle: ::std::thread::JoinHandle<()>
 }
 
 /// Representation of an active pipeline.
 pub struct ActivePipeline {
     /// OS processes
     job: Job,
-
-    /// Asynchronous transformer evaluations
-    xforms: Vec<TransformHandle>
 }
 
 impl ActivePipeline {
     /// Wait until all the processes in the pipeline have terminated
     pub fn wait(mut self) {
         self.job.wait().expect("wait failed");
-        for x in self.xforms {
-            x.handle.join().unwrap();
-        }
     }
 }
