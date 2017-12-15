@@ -534,6 +534,7 @@ impl PartialEq for Value {
             (&ValueData::Number(ref x),  &ValueData::Number(ref y)) => x == y,
             (&ValueData::Str(ref x),     &ValueData::Str(ref y))    => x == y,
             (&ValueData::Symbol(ref x),  &ValueData::Symbol(ref y)) => x == y,
+            (&ValueData::Atom(ref x),    &ValueData::Atom(ref y))   => x == y,
             (&ValueData::List(ref x),    &ValueData::List(ref y))   => x == y,
 
             // don't bother comparing functions or wrappers yet
