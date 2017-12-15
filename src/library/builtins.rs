@@ -1,6 +1,17 @@
 use environment::*;
 use data::*;
 
+lazy_static! {
+    static ref DOC_CD: Documentation = Documentation::new()
+        .form(&["dir"])
+        .short("Change the current working directory");
+
+    static ref DOC_PWD: Documentation = Documentation::new()
+        .form(&["arg*"])
+        .short("Return the current working directory")
+        .desc("Ignores any given arguments.");
+}
+
 fn check_result<T>(e: ::nix::Result<T>) -> Eval<T> {
     use nix::Error;
 
@@ -30,8 +41,15 @@ fn fn_cd(_: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+fn fn_pwd(_: &Environment, args: &[Value]) -> EvalResult {
+    check_result(::nix::unistd::getcwd())
+        .map(|p| p.into_os_string().into_string().unwrap())
+        .map(|s| Value::str(s))
+}
+
 pub fn initialize() {
     let env = global();
 
-    env.set("cd", Value::from(Executable::native(fn_cd)))
+    env.set("cd", Value::from(Executable::native(fn_cd)).document(&DOC_CD));
+    env.set("pwd", Value::from(Executable::native(fn_pwd)).document(&DOC_PWD));
 }
