@@ -14,7 +14,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     -[ ] Symbol/atom interning
     -[ ] Exceptions and handling
     -[ ] Use persistent data structures in place of native Vec
-    -[ ] Wrapper interface for global value-like objects (e.g. `path` and such)
+    -[X] Wrapper interface for global value-like objects (e.g. `path` and such)
     -[ ] Continuations
     -[ ] Defined binary serialization format w/ fast native-code encoder
     [ ] Standard library
