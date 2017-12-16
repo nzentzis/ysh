@@ -57,8 +57,27 @@ impl Environment {
     }
 }
 
+/// A trait for things which can be inserted as value proxies
+///
+/// Binding proxies allow code to intercept user attempts to access or overwrite
+/// the value of a given binding. This is useful for components like history or
+/// environment variables.
+pub trait BindingProxy {
+    /// Get the proxy's current value
+    fn get(&self) -> Value;
+
+    /// Called when the user attempts to bind a new value
+    fn set(&self, val: Value);
+}
+
+#[derive(Clone)]
+enum GlobalMappingValue {
+    Literal(Value),
+    Proxy(Arc<BindingProxy + Send + Sync>)
+}
+
 struct GlobalMapping {
-    value: Value,
+    value: GlobalMappingValue,
     mutable: bool
 }
 
@@ -83,33 +102,54 @@ impl GlobalEnvironment {
         let r = self.mappings.read().unwrap();
         r.get(key.as_ref())
          .map(|r| r.value.clone())
+         .map(|v| match v {
+             GlobalMappingValue::Literal(v) => v,
+             GlobalMappingValue::Proxy(ref p) => p.get()
+         })
     }
 
-    fn set_key<K: AsRef<str>>(&self, key: K, val: Value, mutable: bool) {
+    fn set_key<K: AsRef<str>>(&self,
+                              key: K,
+                              val: GlobalMappingValue,
+                              mutable: bool) {
         use std::collections::hash_map::Entry;
-
-        let mapping = GlobalMapping { value: val, mutable };
 
         let mut w = self.mappings.write().unwrap();
         let entry = w.entry(key.as_ref().to_owned());
 
         match entry {
             Entry::Occupied(mut e) => {
-                let m = e.get().mutable;
-                if m { e.insert(mapping); }
+                let existing_val = e.get_mut();
+
+                // use a proxy if present
+                if let GlobalMappingValue::Proxy(ref a) = existing_val.value {
+                    // setting proxy to proxy is invalid
+                    if let GlobalMappingValue::Literal(v) = val { a.set(v); }
+                    else { panic!("cannot write proxy var into proxy"); }
+                } else if existing_val.mutable {
+                    existing_val.value = val;
+                    existing_val.mutable = mutable;
+                }
             },
-            Entry::Vacant(v) => { v.insert(mapping); }
+            Entry::Vacant(v) => {
+                v.insert(GlobalMapping { value: val, mutable });
+            }
         }
     }
 
     pub fn set<K: AsRef<str>>(&self, key: K, val: Value) {
         let id = Identifier::new(key.as_ref());
-        self.set_key(key, val.rename(id), true);
+        self.set_key(key, GlobalMappingValue::Literal(val.rename(id)), true);
     }
 
     pub fn set_immut<K: AsRef<str>>(&self, key: K, val: Value) {
         let id = Identifier::new(key.as_ref());
-        self.set_key(key, val.rename(id), false);
+        self.set_key(key, GlobalMappingValue::Literal(val.rename(id)), false);
+    }
+
+    pub fn set_proxy<K, P>(&self, key: K, prox: P)
+            where K: AsRef<str>, P: BindingProxy+Send+Sync+'static {
+        self.set_key(key, GlobalMappingValue::Proxy(Arc::new(prox)), false);
     }
 }
 
