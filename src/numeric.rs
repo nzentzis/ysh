@@ -17,6 +17,23 @@ pub enum Number {
     Complex {a: f64, b: f64}
 }
 
+impl ::std::hash::Hash for Number {
+    fn hash<H: ::std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            &Number::Integer(i) => state.write_i64(i),
+            &Number::Rational {num, denom} => {
+                state.write_i64(num);
+                state.write_i64(denom);
+            },
+            &Number::Real(f) => state.write_i64(f.round() as i64),
+            &Number::Complex {a,b} => {
+                state.write_i64(a.round() as i64);
+                state.write_i64(b.round() as i64);
+            }
+        }
+    }
+}
+
 impl Number {
     /// Generate a new integer
     pub fn int(x: i64) -> Self {

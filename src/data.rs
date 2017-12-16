@@ -169,6 +169,7 @@ pub enum ValueData {
     Str(String),
     Symbol(Identifier),
     Atom(Arc<String>), // TODO: add interning
+    Map(HashMap<ValueHash, Value>),
     List(Vec<Value>),
     Function(Executable),
     Macro(Executable),
@@ -223,6 +224,34 @@ impl Documentation {
         self
     }
 }
+
+#[derive(Clone, Debug)]
+/// Unified storage for a value and its hash
+///
+/// Since values cannot be reliably hashed (the operation may fail with an
+/// `EvalError`) this wraps a value and stored hash to allow the use of values
+/// as hashable objects.
+pub struct ValueHash {
+    hash: u64,
+    val: Value
+}
+
+impl ::std::hash::Hash for ValueHash {
+    fn hash<H: ::std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+impl ::std::ops::Deref for ValueHash {
+    type Target = Value;
+    fn deref(&self) -> &Value { &self.val }
+}
+
+impl PartialEq for ValueHash {
+    fn eq(&self, other: &Self) -> bool { self.val == other.val }
+}
+
+impl Eq for ValueHash {}
 
 #[derive(Clone, Debug)]
 pub struct Value {
@@ -324,6 +353,43 @@ impl Value {
     pub fn is_macro(&self) -> bool {
         if let &ValueData::Macro(_) = &self.data { true } else { false }
     }
+
+    /// Try to compute a hashed version of the underlying values
+    pub fn hash(&self) -> Eval<Option<ValueHash>> {
+        use std::hash::{Hasher, Hash};
+
+        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
+        match &self.data {
+            &ValueData::Boolean(x)    => x.hash(&mut hasher),
+            &ValueData::Number(ref n) => n.hash(&mut hasher),
+            &ValueData::Str(ref x)    => x.hash(&mut hasher),
+            &ValueData::Symbol(ref x) => x.as_ref().hash(&mut hasher),
+            &ValueData::Atom(ref x)   => x.hash(&mut hasher),
+            &ValueData::Map(ref x) => {
+                for (ref k, ref v) in x {
+                    k.hash(&mut hasher);
+                    match v.hash()? {
+                        Some(v) => v.hash(&mut hasher),
+                        None => return Ok(None)
+                    }
+                }
+            },
+            &ValueData::List(ref x) => {
+                for i in x {
+                    match i.hash()? {
+                        Some(v) => v.hash(&mut hasher),
+                        None => return Ok(None)
+                    }
+                }
+            },
+            _ => return Ok(None)
+        }
+
+        Ok(Some(ValueHash {
+            hash: hasher.finish(),
+            val: self.to_owned()
+        }))
+    }
 }
 
 impl From<Executable> for Value {
@@ -409,6 +475,10 @@ impl ValueLike for Value {
             &ValueData::Str(ref s)          => Ok(s.to_owned()),
             &ValueData::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
             &ValueData::Atom(ref a)         => Ok(format!(":{}", a)),
+            &ValueData::Map(_) => {
+                // TODO: support proper string conversion
+                Ok(String::from("<map>"))
+            },
             &ValueData::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
@@ -445,6 +515,7 @@ impl ValueLike for Value {
             &ValueData::Str(ref s)          => Ok(!s.is_empty()),
             &ValueData::Symbol(_)           => Ok(true),
             &ValueData::Atom(_)             => Ok(true),
+            &ValueData::Map(ref m)          => Ok(!m.is_empty()),
             &ValueData::List(ref l) => Ok(
                 if l.is_empty() { false }
                 else { l.iter().map(|x| x.into_bool())
@@ -535,6 +606,7 @@ impl PartialEq for Value {
             (&ValueData::Str(ref x),     &ValueData::Str(ref y))    => x == y,
             (&ValueData::Symbol(ref x),  &ValueData::Symbol(ref y)) => x == y,
             (&ValueData::Atom(ref x),    &ValueData::Atom(ref y))   => x == y,
+            (&ValueData::Map(ref m),     &ValueData::Map(ref n))    => m == n,
             (&ValueData::List(ref x),    &ValueData::List(ref y))   => x == y,
 
             // don't bother comparing functions or wrappers yet
@@ -666,6 +738,7 @@ impl fmt::Debug for ValueData {
             &ValueData::Str(ref s)     => write!(f, "<str:\"{}\">", s),
             &ValueData::Symbol(ref s)  => write!(f, "<sym:{}>", s.0),
             &ValueData::Atom(ref s)    => write!(f, "<atom:{}>", s),
+            &ValueData::Map(_)         => write!(f, "<map>"),
             &ValueData::List(ref v)    => write!(f, "{:?}", v),
             &ValueData::Function(_)    => write!(f, "<function>"),
             &ValueData::Macro(_)       => write!(f, "<macro>"),
