@@ -12,7 +12,7 @@ use environment::{global, empty, run_fn};
 use jobs::{Command, Job, IoChannel};
 use stream::*;
 
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum AdapterType {
     StreamToPoly,     // full semantic stream parsing
     StreamToString,   // stream to object conversion without any semantic stuff
@@ -54,6 +54,7 @@ impl PipeType {
             (&PipeType::Object, &PipeType::Object) => true,
             (&PipeType::Either, &PipeType::Stream) => true,
             (&PipeType::Either, &PipeType::Object) => true,
+            (_,                 &PipeType::Either) => true,
             _                                      => false,
         }
     }
@@ -94,13 +95,26 @@ impl PlanElement {
             &PlanElement::AppendVar(_)   => (PipeType::Object, PipeType::Cap),
         }
     }
+
+    /// Build an element adapting between the given types
+    pub fn adapt(i: PipeType, o: PipeType) -> Self {
+        PlanElement::Adapter(AdapterType::fit(i, o))
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum PlanningError {
     MultipleInputs,
     MultipleOutputs,
+    FrozenPipeline,
     NotFound
+}
+
+/// Errors which can arise from attempting to launch a pipeline
+#[derive(Debug)]
+pub enum LaunchError {
+    Evaluation(EvalError),
+    Unknown
 }
 
 /// Find the plan element for an actual transformation
@@ -164,103 +178,199 @@ fn plan_transform(mut xform: Transformer)
 }
 
 #[derive(Debug)]
-pub struct Plan(Vec<PlanElement>);
+/// Structure to plan execution operations for a pipeline
+///
+/// This accumulates and generates a set of pipeline evaluation ops for the
+/// given pipeline so that the resulting chain will perform as few conversions
+/// as possible.
+///
+/// As a side effect of this planning process, we can accomodate commands that
+/// need to be plugged directly into stdin/stdout like `vim` or `htop`.
+///
+/// To generate a plan, create an empty pipeline plan with `new`, then add each
+/// component using the `push` and `add_terminal` methods. When done, call
+/// `freeze`. Once frozen, the pipeline can be used to launch instances of the
+/// described job.
+pub struct Plan {
+    /// The inner components of the plan which don't directly link to the input
+    /// or output
+    elems: Vec<PlanElement>,
+
+    /// The plan's input element
+    input: Option<PlanElement>,
+
+    /// The plan's output element
+    output: Option<PlanElement>,
+
+    /// The current type at the head of the pipeline
+    ///
+    /// Set to `Either` by default; when finalizing, elements will be inserted
+    /// to convert the input type into the first element's input.
+    output_type: PipeType,
+
+    /// Whether the plan is frozen
+    ///
+    /// When frozen, no extra elements may be pushed.
+    frozen: bool
+}
 
 impl Plan {
-    /// Generate a plan for evaluating the given pipeline
-    /// 
-    /// We need a plan for pipeline evaluation since in any given pipeline we
-    /// should do the fewest conversions possible. As a side effect, this also
-    /// means we can accomodate commands that need to be plugged directly into
-    /// stdin/stdout like vim or 
-    pub fn generate(pipe: Pipeline) -> Result<Self, PlanningError> {
-        let Pipeline {elements, terminals} = pipe;
+    /// Create a new empty plan
+    ///
+    /// By default, this will use standard input as input to the pipeline and
+    /// standard output as the output. To change this, apply terminal modes.
+    pub fn new() -> Self {
+        Plan {
+            elems: Vec::new(),
+            input: None,
+            output: None,
+            output_type: PipeType::Stream,
+            frozen: false
+        }
+    }
 
-        let mut res = Vec::new();
+    /// Create a plan from the given pipeline
+    ///
+    /// The resulting plan will be frozen if generated successfully
+    pub fn plan_for(p: Pipeline) -> Result<Self, PlanningError> {
+        let Pipeline {elements, terminals} = p;
+        let mut plan = Plan::new();
 
-        // add stdin or a file if needed
-        let mut first = None;
-        let mut last = None;
-        for t in terminals {
-            let (f,l) = match t {
-                TerminalMode::ReplaceFile(s) =>
-                    (None, Some(PlanElement::ToFile(s))),
-                TerminalMode::AppendFile(s) =>
-                    (None, Some(PlanElement::AppendFile(s))),
-                TerminalMode::SetVariable(id) =>
-                    (None, Some(PlanElement::IntoVar(id))),
-                TerminalMode::AppendVariable(id) =>
-                    (None, Some(PlanElement::AppendVar(id))),
-                TerminalMode::InputFile(s) =>
-                    (Some(PlanElement::FromFile(s)), None),
-                TerminalMode::InputVar(id) =>
-                    (Some(PlanElement::FromVar(id)), None),
+        for t in terminals { plan.add_terminal(t)?; }
+        for e in elements { plan.push(e)?; }
+
+        Ok(plan)
+    }
+    
+    /// Modify the input or output based on a given terminal mode
+    ///
+    /// If the required terminal point (i.e. input or output) has already been
+    /// specified by another call, this function may fail with a corresponding
+    /// error code.
+    pub fn add_terminal(&mut self,
+                        term: TerminalMode) -> Result<(), PlanningError> {
+        let (f,l) = match term {
+            TerminalMode::ReplaceFile(s) => (None, Some(PlanElement::ToFile(s))),
+            TerminalMode::AppendFile(s) => (None, Some(PlanElement::AppendFile(s))),
+            TerminalMode::SetVariable(id) => (None, Some(PlanElement::IntoVar(id))),
+            TerminalMode::AppendVariable(id) => (None, Some(PlanElement::AppendVar(id))),
+            TerminalMode::InputFile(s) => (Some(PlanElement::FromFile(s)), None),
+            TerminalMode::InputVar(id) => (Some(PlanElement::FromVar(id)), None),
+        };
+
+        if let Some(f) = f { // it's an output mode
+            if self.output.is_none() {
+                self.output = Some(f);
+                Ok(())
+            } else {
+                Err(PlanningError::MultipleOutputs)
+            }
+        } else if let Some(l) = l { // it's an input mode
+            if !self.input.is_none() {
+                return Err(PlanningError::MultipleOutputs);
+            }
+
+            self.input = Some(l);
+            Ok(())
+        } else {
+            panic!("cannot interpret terminal mode. this is a bug.")
+        }
+    }
+
+    /// Add a pipeline component to the plan
+    pub fn push(&mut self, c: PipelineComponent) -> Result<(), PlanningError> {
+        if self.frozen { return Err(PlanningError::FrozenPipeline); }
+        let PipelineComponent { xform, link } = c;
+
+        let cmd = plan_transform(xform)?;
+        let cmd_io = cmd.io_types();
+
+        // add the element to the plan
+        self.adapt_head(cmd_io.0);
+        self.elems.push(cmd);
+        self.output_type = cmd_io.1;
+
+        // tack on the requested pipe
+        if let Some(link) = link {
+            let elem = match link {
+                PipeMode::DelimitedPipe(c) =>
+                    Some(PlanElement::Adapter(AdapterType::StreamDelim(c))),
+                PipeMode::PipeText =>
+                    Some(PlanElement::Adapter(AdapterType::StreamToString)),
+                PipeMode::Pipe => None
             };
 
-            if let Some(f) = f {
-                if first.is_some() {return Err(PlanningError::MultipleInputs);}
-                first = Some(f);
-            }
-            if let Some(l) = l {
-                if last.is_some() {return Err(PlanningError::MultipleOutputs);}
-                last = Some(l);
-            }
-        }
-
-        res.push(first.unwrap_or(PlanElement::Stdin));
-        let last = last.unwrap_or(PlanElement::Stdout);
-
-        // run through the pipeline, inserting converters as needed
-        let mut last_output = res[0].io_types().1;
-        for elem in elements {
-            let PipelineComponent {xform, link} = elem;
-
-            let cmd = plan_transform(xform)?;
-            let cmd_io = cmd.io_types();
-
-            // insert an adapter before if needed
-            if !cmd_io.0.accepts(&last_output) {
-                // generate an adapter
-                res.push(PlanElement::Adapter(
-                        AdapterType::fit(last_output, cmd_io.0)));
-            }
-            res.push(cmd);
-            last_output = cmd_io.1;
-
-            // add the user's requested pipe
-            if let Some(mode) = link {
-                let to_add = match mode {
-                    PipeMode::DelimitedPipe(c) =>
-                        Some(PlanElement::Adapter(AdapterType::StreamDelim(c))),
-                    PipeMode::Pipe => None,
-                    PipeMode::PipeText =>
-                        Some(PlanElement::Adapter(AdapterType::StreamToString))
-                };
-
-                if let Some(e) = to_add {
-                    // don't add adapter if it wouldn't help
-                    if e.io_types().1 != last_output {
-                        last_output = e.io_types().1;
-                        res.push(e);
-                    }
+            if let Some(e) = elem {
+                // don't add an adapter if it wouldn't help
+                if e.io_types().1 != self.output_type {
+                    self.adapt_head(e.io_types().0);
+                    self.output_type = e.io_types().1;
+                    self.elems.push(e);
                 }
             }
+        } else {
+            self.freeze();
         }
 
-        // attach output
-        if !last.io_types().0.accepts(&last_output) {
-            // adapt I/O
-            res.push(PlanElement::Adapter(
-                    AdapterType::fit(last_output, last.io_types().0)));
-        }
-        res.push(last);
+        Ok(())
+    }
 
-        Ok(Plan(res))
+    /// Add adapter elements to the front of the plan in order to make the head
+    /// compatible with the given target
+    fn adapt_head(&mut self, tgt: PipeType) {
+        if tgt.accepts(&self.output_type) { return; }
+
+        let elem = PlanElement::adapt(self.output_type, tgt);
+        self.output_type = elem.io_types().1;
+        self.elems.push(elem);
+    }
+
+    /// Freeze the plan
+    ///
+    /// This prevents any future modifications to the pipeline and prepares it
+    /// for use in launching jobs.
+    pub fn freeze(&mut self) -> &Self {
+        if self.frozen { return self; }
+        self.frozen = true;
+
+        // generate adapter sequences for inputs and outputs
+        let input = self.input.take().unwrap_or(PlanElement::Stdin);
+        let output = self.input.take().unwrap_or(PlanElement::Stdout);
+
+        if self.elems.is_empty() {
+            // special case - we can't rely on io_types normally here
+            if !output.io_types().0.accepts(&input.io_types().1) {
+                self.elems.push(PlanElement::adapt(output.io_types().0,
+                                                   input.io_types().1));
+            }
+
+            return self;
+        }
+
+        {
+            if !self.elems[0].io_types().0.accepts(&input.io_types().1) {
+                let in_iotype = self.elems[0].io_types().0;
+                self.elems.insert(0,
+                        PlanElement::adapt(input.io_types().1, in_iotype));
+            }
+            self.elems.insert(0, input);
+        }
+
+        {
+            let last_type = self.elems.last().unwrap().io_types().1;
+            if !output.io_types().0.accepts(&last_type) {
+                self.elems.push(PlanElement::adapt(last_type,
+                                                   output.io_types().0));
+            }
+            self.elems.push(output);
+        }
+
+        self
     }
 
     /// Construct a file descriptor from the first input element
     fn get_input_fd(&self) -> RawFd {
-        match &self.0[0] {
+        match &self.elems[0] {
             &PlanElement::Stdin          => io::stdin().as_raw_fd(),
             &PlanElement::FromFile(ref _fname)=> {
                 unimplemented!("file inputs not yet ready")
@@ -272,31 +382,35 @@ impl Plan {
         }
     }
 
-    /// Launch the relevant processes and actually start running the pipeline
+    /// Create an active instance of the pipeline
     /// 
     /// Pipelines are executed by joining all contiguous shell components
     /// together and launching each block of contiguous operations in a thread.
-    pub fn launch(mut self, background: bool) -> Option<ActivePipeline> {
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the plan has not been frozen
+    pub fn launch(&self, background: bool) -> Result<ActivePipeline, LaunchError> {
+        if !self.frozen { panic!("cannot launch unfrozen plan"); }
+
         // fd of the last output
         let mut last_output = self.get_input_fd();
 
-        // remove the first element so we don't process it twice
-        self.0.remove(0);
-
-        // pull info of the last element out beforehand
-        let last_elem = self.0.pop().unwrap();
-        let arr_len = self.0.len();
+        // drop the first element so we don't process it twice
+        let mut elems_iter = self.elems.iter()
+                                       .skip(1)
+                                       .peekable();
 
         // execute all plan elements
         let mut job = Job::new();
-        let mut plan_buffer = Vec::with_capacity(self.0.len());
-        for (idx, element) in self.0.into_iter().enumerate() {
+        let mut plan_buffer = Vec::with_capacity(self.elems.len());
+        while let Some(element) = elems_iter.next() {
             match element {
-                PlanElement::Expression(v) =>
-                    plan_buffer.push(PlanElement::Expression(v)),
-                PlanElement::Adapter(t) =>
-                    plan_buffer.push(PlanElement::Adapter(t)),
-                PlanElement::Command {exec, invoked_name, args} => {
+                &PlanElement::Expression(ref v) =>
+                    plan_buffer.push(PlanElement::Expression(v.to_owned())),
+                &PlanElement::Adapter(ref t) =>
+                    plan_buffer.push(PlanElement::Adapter(*t)),
+                &PlanElement::Command {ref exec, ref invoked_name, ref args} => {
                     // we have to flush the plan buffer if there's anything
                     // there
                     if !plan_buffer.is_empty() {
@@ -311,14 +425,14 @@ impl Plan {
                             // handle launch failure
                             // currently just close FDs and abort
                             // TODO: close non-stdin FDs here
-                            return None;
+                            // TODO: specific error code
+                            return Err(LaunchError::Unknown);
                         }
                         last_output = o;
                     }
 
                     // check whether to link the output to stdout
-                    let fwd_stdout = idx == (arr_len-1) &&
-                                     last_elem == PlanElement::Stdout;
+                    let fwd_stdout = elems_iter.peek() == Some(&&PlanElement::Stdout);
 
                     // evaluate args
                     let args = args.into_iter()
@@ -369,8 +483,8 @@ impl Plan {
                     let args = match args {
                         Ok(r) => r,
                         Err(e) => {
-                            eprintln!("ysh: argument evaluation failed: {}", e);
-                            return None;
+                            // TODO: kill existing components
+                            return Err(LaunchError::Evaluation(e));
                         }
                     };
 
@@ -404,24 +518,25 @@ impl Plan {
         // flushed already as part of launching it.
         if !plan_buffer.is_empty() {
             // figure out what output to use
-            let out = match last_elem {
-                PlanElement::Stdout         => EvalOutput::PrettyStdout,
-                PlanElement::AppendFile(_f)  => unimplemented!(),
-                PlanElement::AppendVar(_id)  => unimplemented!(),
-                PlanElement::ToFile(_f)      => unimplemented!(),
-                PlanElement::IntoVar(_id)    => unimplemented!(),
-                _                           => panic!("invalid plan terminator")
+            let out = match self.elems.last().unwrap() {
+                &PlanElement::Stdout         => EvalOutput::PrettyStdout,
+                &PlanElement::AppendFile(_)  => unimplemented!(),
+                &PlanElement::AppendVar(_ )  => unimplemented!(),
+                &PlanElement::ToFile(_)      => unimplemented!(),
+                &PlanElement::IntoVar(_)     => unimplemented!(),
+                _                            => panic!("invalid plan terminator")
             };
 
             let eval = TransformEvaluation::launch(&mut job,
                 last_output, plan_buffer.drain(..), out);
             if eval.is_none() {
                 // TODO close output FDs here
-                return None;
+                // TODO: specific error code
+                return Err(LaunchError::Unknown);
             }
         }
 
-        Some(ActivePipeline { job })
+        Ok(ActivePipeline { job })
     }
 }
 

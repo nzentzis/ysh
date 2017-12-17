@@ -219,7 +219,7 @@ fn main() {
             Err(_) => unimplemented!()
         };
 
-        let plan = match Plan::generate(cmd) {
+        let plan = match Plan::plan_for(cmd) {
             Ok(r) => r,
             Err(e) => {
                 match e {
@@ -227,15 +227,20 @@ fn main() {
                         eprintln!("ysh: failed to plan job: too many inputs"),
                     PlanningError::MultipleOutputs =>
                         eprintln!("ysh: failed to plan job: too many outputs"),
-                    PlanningError::NotFound => {}
+                    PlanningError::NotFound => {},
+                    PlanningError::FrozenPipeline =>
+                        panic!("unexpected frozen pipeline error")
                 }
                 continue;
             }
         };
         //println!("\r{:?}", plan);
 
-        if let Some(x) = plan.launch(false) {
-            x.wait();
+        match plan.launch(false) {
+            Ok(x) => x.wait(),
+            Err(e) => {
+                eprintln!("ysh: pipeline launch error: {:?}", e)
+            }
         }
     }
 }
