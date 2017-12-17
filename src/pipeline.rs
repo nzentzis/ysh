@@ -114,6 +114,7 @@ pub enum PlanningError {
 #[derive(Debug)]
 pub enum LaunchError {
     Evaluation(EvalError),
+    JobLaunch(::nix::Error),
     Unknown
 }
 
@@ -174,6 +175,46 @@ fn plan_transform(mut xform: Transformer)
             invoked_name: cmd,
             args: xform.0.split_off(1)
         })
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum FDWrapper {
+    Stdin, Stdout,
+    Pipe(RawFd)
+}
+
+impl FDWrapper {
+    fn as_fd(&self) -> RawFd {
+        match self {
+            &FDWrapper::Stdin   => io::stdin().as_raw_fd(),
+            &FDWrapper::Stdout  => io::stdout().as_raw_fd(),
+            &FDWrapper::Pipe(f) => f,
+        }
+    }
+
+    fn into_fd(self) -> RawFd {
+        let r = match self {
+            FDWrapper::Stdin   => io::stdin().as_raw_fd(),
+            FDWrapper::Stdout  => io::stdout().as_raw_fd(),
+            FDWrapper::Pipe(f) => f,
+        };
+
+        // avoid dropping self so we don't close FDs
+        ::std::mem::forget(self);
+
+        r
+    }
+}
+
+impl Drop for FDWrapper {
+    fn drop(&mut self) {
+        match self {
+            &mut FDWrapper::Pipe(f) => {
+                unistd::close(f).expect("failed to close wrapped FD");
+            },
+            _ => {}
+        }
     }
 }
 
@@ -369,9 +410,9 @@ impl Plan {
     }
 
     /// Construct a file descriptor from the first input element
-    fn get_input_fd(&self) -> RawFd {
+    fn get_input_fd(&self) -> FDWrapper {
         match &self.elems[0] {
-            &PlanElement::Stdin          => io::stdin().as_raw_fd(),
+            &PlanElement::Stdin => FDWrapper::Stdin,
             &PlanElement::FromFile(ref _fname)=> {
                 unimplemented!("file inputs not yet ready")
             },
@@ -394,7 +435,7 @@ impl Plan {
         if !self.frozen { panic!("cannot launch unfrozen plan"); }
 
         // fd of the last output
-        let mut last_output = self.get_input_fd();
+        let mut last_output = Some(self.get_input_fd());
 
         // drop the first element so we don't process it twice
         let mut elems_iter = self.elems.iter()
@@ -417,18 +458,20 @@ impl Plan {
                         // generate a pipe
                         let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
                                            .expect("cannot generate pipes");
+                        let i = FDWrapper::Pipe(i);
+                        let o = FDWrapper::Pipe(o);
                         let eval = TransformEvaluation::launch(&mut job,
-                                        last_output, plan_buffer.drain(..),
+                                        last_output.take().unwrap(),
+                                        plan_buffer.drain(..),
                                         EvalOutput::Descriptor(i));
 
                         if eval.is_none() {
                             // handle launch failure
                             // currently just close FDs and abort
-                            // TODO: close non-stdin FDs here
                             // TODO: specific error code
                             return Err(LaunchError::Unknown);
                         }
-                        last_output = o;
+                        last_output = Some(o);
                     }
 
                     // check whether to link the output to stdout
@@ -489,21 +532,36 @@ impl Plan {
                     };
 
                     // TODO: redirect or handle stderr
-                    // TODO: handle spawn failure
-                    // TODO: handle arg evaluation failure
+                    let out_fd = last_output.as_ref().unwrap().as_fd();
                     let cmd = Command::new(exec)
                                       .invoked_using(invoked_name)
                                       .args(args)
-                                      .stdin(if last_output == 0 { IoChannel::Inherited }
-                                             else {IoChannel::Specific(last_output)})
-                                      .stdout(if fwd_stdout { IoChannel::Inherited }
-                                              else { IoChannel::Pipe });
+                                      .stdin(
+                                          if last_output == Some(FDWrapper::Stdin) {
+                                              IoChannel::Inherited }
+                                          else {IoChannel::Specific(last_output
+                                                                   .take()
+                                                                   .unwrap()
+                                                                   .into_fd())})
+                                      .stdout(
+                                          if fwd_stdout { IoChannel::Inherited }
+                                          else { IoChannel::Pipe });
                     let cmd = if background { cmd }
                               else { cmd.foreground() };
-                    let process = job.launch(cmd).expect("cannot spawn child");
+                    let process = match job.launch(cmd) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // retake ownership of output FD
+                            FDWrapper::Pipe(out_fd);
+                            return Err(LaunchError::JobLaunch(e));
+                        }
+                    };
 
                     if !fwd_stdout {
-                        last_output = process.stdout().unwrap().into_raw_fd();
+                        last_output = Some(FDWrapper::Pipe(
+                                process.stdout()
+                                       .unwrap()
+                                       .into_raw_fd()));
                     }
                 },
                 _ => {}
@@ -528,7 +586,7 @@ impl Plan {
             };
 
             let eval = TransformEvaluation::launch(&mut job,
-                last_output, plan_buffer.drain(..), out);
+                last_output.take().unwrap(), plan_buffer.drain(..), out);
             if eval.is_none() {
                 // TODO close output FDs here
                 // TODO: specific error code
@@ -542,7 +600,7 @@ impl Plan {
 
 enum EvalOutput {
     PrettyStdout,
-    Descriptor(RawFd)
+    Descriptor(FDWrapper)
 }
 
 /// Representation of a transformer evaluation which is running as part of a
@@ -556,7 +614,7 @@ struct TransformEvaluation {
 }
 
 impl TransformEvaluation {
-    fn build_innermost_elem(input: RawFd, first: PlanElement) -> PolyStream {
+    fn build_innermost_elem(input: FDWrapper, first: PlanElement) -> PolyStream {
         let config = match first {
             PlanElement::Adapter(AdapterType::StreamToPoly)   => StreamOptions::new(),
             PlanElement::Adapter(AdapterType::StreamToString) => StreamOptions::basic(),
@@ -568,10 +626,11 @@ impl TransformEvaluation {
             _ => panic!("unhandled plan element")
         };
 
-        if input == io::stdin().as_raw_fd() {
+        if input == FDWrapper::Stdin {
             PolyStream::from_stdin(config).expect("cannot construct stream")
         } else {
-            PolyStream::from_fd(input, config).expect("cannot construct stream")
+            PolyStream::from_fd(input.into_fd(),
+                                config).expect("cannot construct stream")
         }
     }
 
@@ -622,8 +681,10 @@ impl TransformEvaluation {
         }
     }
 
-    fn launch<I>(job: &mut Job, input: RawFd, elements: I, output: EvalOutput)
-            -> Option<()>
+    fn launch<I>(job: &mut Job,
+                 input: FDWrapper,
+                 elements: I,
+                 output: EvalOutput) -> Option<()>
             where I: IntoIterator<Item=PlanElement> {
         use std::io::prelude::*;
 
@@ -634,8 +695,8 @@ impl TransformEvaluation {
         // since we the pipeline gets built from the inside (left element) out
         // (toward the right) we need to keep track of the current element at
         // all times.
-        let mut innermost =
-            Value::new(TransformEvaluation::build_innermost_elem(input, first));
+        let mut innermost = Value::new(
+            TransformEvaluation::build_innermost_elem(input, first));
 
         // TODO: Support for killing active transforms
         for elem in elements {
@@ -684,7 +745,9 @@ impl TransformEvaluation {
                     }
                 },
                 EvalOutput::Descriptor(fd) => {
-                    let mut f = unsafe {::std::fs::File::from_raw_fd(fd)};
+                    let mut f = unsafe {
+                        ::std::fs::File::from_raw_fd(fd.into_fd())
+                    };
                     match res.into_str() {
                         Ok(r) => {write!(f, "{}", r).unwrap();},
                         Err(e) =>

@@ -326,7 +326,7 @@ pub struct ShellTask {
 
 impl ShellTask {
     /// Start a new shell task using the given function
-    pub fn start<F: Fn() -> ()+Sync+Send+'static>(f: F) -> Self {
+    pub fn start<F: FnOnce() -> ()+Sync+Send+'static>(f: F) -> Self {
         let h = thread::spawn(move || f());
 
         ShellTask {
@@ -415,7 +415,7 @@ impl Job {
     }
 
     /// Start evaluating an internal task as part of this job
-    pub fn spawn<F: Fn() -> ()+Sync+Send+'static>(&mut self, f: F) -> &ShellTask {
+    pub fn spawn<F: FnOnce() -> ()+Sync+Send+'static>(&mut self, f: F) -> &ShellTask {
         let t = ShellTask::start(f);
 
         self.tasks.push(Task::Internal(t));
