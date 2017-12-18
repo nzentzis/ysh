@@ -28,7 +28,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     --[ ] Termcap interface
     --[ ] Global stream abstraction
     -[ ] Environment
-    --[ ] Environment variables
+    --[X] Environment variables
     ---[ ] Integrate with reader
     -[ ] Async (`async/*`)
     --[ ] Deferred/future values

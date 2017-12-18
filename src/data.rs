@@ -318,6 +318,11 @@ impl Value {
         }
     }
 
+    /// Build a hashmap
+    pub fn map<I: IntoIterator<Item=(ValueHash, Value)>>(i: I) -> Value {
+        Value::from(ValueData::Map(i.into_iter().collect::<HashMap<_,_>>()))
+    }
+
     /// Perform macro expansion on the contained form
     pub fn macroexpand(self) -> EvalResult {
         match self.data {

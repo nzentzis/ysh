@@ -87,6 +87,54 @@ fn locate_executable(env: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::list(res))
 }
 
+struct EnvProxy(::std::sync::Mutex<Value>);
+
+impl EnvProxy {
+    fn new() -> Self {
+        // TODO: switch this to a bytes type once one is available
+        let v = Value::map(
+            ::std::env::vars_os()
+                .map(|(k,v)| {
+                    let k = Value::str(k.to_string_lossy())
+                                  .hash()
+                                  .unwrap() // direct strings are hashable
+                                  .unwrap();
+                    let v = Value::str(v.to_string_lossy());
+                    (k,v)}));
+        EnvProxy(::std::sync::Mutex::new(v))
+    }
+}
+
+impl environment::BindingProxy for EnvProxy {
+    fn get(&self) -> Value {
+        self.0.lock().unwrap().to_owned()
+    }
+
+    fn set(&self, val: Value) {
+        let mut current_val = self.0.lock().unwrap();
+        let current = &mut current_val.data;
+        let current = if let &mut data::ValueData::Map(ref mut h) = current {h}
+                      else {panic!("invalid environment storage")};
+
+        // try to convert into a hashmap
+        let mut val = if let data::ValueData::Map(h) = val.data {h}
+                      else {return};
+
+        // compute delta between it and our current value by removing any
+        // differing keys
+        val.retain(|k,v| current.get(&k) != Some(v));
+
+        for (k,v) in val.iter() {
+            // abort on conversion fail
+            let k = if let Ok(k) = k.val.into_str() {k}
+                    else {return};
+            let v = if let Ok(v) = v.into_str() {v}
+                    else {return};
+            ::std::env::set_var(k, v);
+        }
+    }
+}
+
 fn init_environment() {
     library::initialize();
 
@@ -144,6 +192,9 @@ fn init_environment() {
 
     // set executable path
     env.set("path", get_initial_paths());
+
+    // create virtual environment map
+    env.set_proxy("env", EnvProxy::new());
 }
 
 fn init_process_group() -> Result<(), nix::Error> {
