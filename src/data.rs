@@ -232,8 +232,8 @@ impl Documentation {
 /// `EvalError`) this wraps a value and stored hash to allow the use of values
 /// as hashable objects.
 pub struct ValueHash {
-    hash: u64,
-    val: Value
+    pub hash: u64,
+    pub val: Value
 }
 
 impl ::std::hash::Hash for ValueHash {
@@ -432,6 +432,12 @@ impl From<bool> for Value {
     }
 }
 
+impl From<ValueData> for Value {
+    fn from(x: ValueData) -> Value {
+        Value {data: x, name: None, doc: None}
+    }
+}
+
 impl ValueLike for Value {
     fn get_symbol(&self) -> Eval<Option<Identifier>> {
         if let ValueData::Symbol(ref id) = self.data { Ok(Some(id.to_owned())) }
@@ -475,9 +481,18 @@ impl ValueLike for Value {
             &ValueData::Str(ref s)          => Ok(s.to_owned()),
             &ValueData::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
             &ValueData::Atom(ref a)         => Ok(format!(":{}", a)),
-            &ValueData::Map(_) => {
-                // TODO: support proper string conversion
-                Ok(String::from("<map>"))
+            &ValueData::Map(ref m) => {
+                let mut items = Vec::new();
+                for (k,v) in m {
+                    items.push(k.val.into_str()?);
+                    items.push(v.into_str()?);
+                }
+
+                let mut s = String::with_capacity(128);
+                s.push('{');
+                s.push_str(&items.join(" "));
+                s.push('}');
+                Ok(s)
             },
             &ValueData::List(ref l)         => {
                 let mut s = String::with_capacity(128);

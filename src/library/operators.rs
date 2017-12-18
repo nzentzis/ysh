@@ -90,6 +90,18 @@ lazy_static! {
         .origin("ops")
         .form(&["expr*"])
         .short("Return whether values are in monotonically non-increasing order");
+
+    static ref DOC_SET: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["object", "key", "val"])
+        .form(&["object", "key0", "val0", "key1", "val1", "..."])
+        .short("Add a mapping to an associative structure")
+        .desc("Evaluate the inputs, then return an updated version of the given \
+               associative structure with the given key-value mappings. If the \
+               value given for object is not associative or if the key is not \
+               valid, this function will fail. Maps can use any hashable type \
+               as a key and vectors can use integers. Undefined spaces in lists \
+               will be filled in with empty () values.");
 }
 
 fn fn_add(_: &Environment, args: &[Value]) -> EvalResult {
@@ -293,6 +305,54 @@ fn fn_le(_: &Environment, args: &[Value]) -> EvalResult {
 fn fn_ge(_: &Environment, args: &[Value]) -> EvalResult {
     ord_compare(args, |a,b| a >= b) }
 
+/// Associate values in a map-like structure
+fn fn_set(_: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() < 3 {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 3
+        })
+    } else if (args.len() - 1) % 2 != 0{
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 3
+        })
+    } else {
+        match args[0].data {
+            ValueData::Map(ref m) => {
+                let mut arg_pairs = Vec::with_capacity(args.len()-1 / 2);
+                {
+                    let mut s = None;
+                    for a in args[1..].iter() {
+                        if let Some(i) = s.take() {
+                            arg_pairs.push((i,a));
+                        } else {
+                            s = Some(a);
+                        }
+                    }
+                }
+                let pairs = arg_pairs.into_iter()
+                           .map(|(k,v)|
+                                if let Some(h) = k.hash()? {Ok((h,v))}
+                                else {Err(EvalError::TypeError(String::from(
+                                                "set keys must be hashable")))})
+                           .collect::<Eval<Vec<_>>>()?;
+
+                let mut r = m.to_owned();
+                for (h,v) in pairs {
+                    r.insert(h,v.to_owned());
+                }
+                Ok(Value::from(ValueData::Map(r)))
+            },
+            ValueData::List(ref v) => {
+                unimplemented!()
+            },
+            _ => Err(EvalError::TypeError(
+                    String::from("Cannot set into non-associative structure")))
+        }
+    }
+}
+
 pub fn initialize() {
     let env = global();
     env.set("+", Value::from(Executable::native(fn_add)).document(&DOC_ADD));
@@ -317,6 +377,8 @@ pub fn initialize() {
                               .document(&DOC_COMPLEXQ));
 
     env.set("inc", Value::from(Executable::native(fn_inc)).document(&DOC_INC));
+
+    env.set("set", Value::from(Executable::native(fn_set)).document(&DOC_SET));
 }
 
 #[cfg(test)]

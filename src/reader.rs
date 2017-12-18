@@ -19,6 +19,7 @@ lazy_static! {
 
 enum ParseStackElement {
     List(Vec<Value>),
+    Map(HashMap<ValueHash, Value>, Option<ValueHash>),
     Quote,
     Lambda,
 }
@@ -405,7 +406,7 @@ pub fn parse_number(x: &[u8]) -> Parse<Number> {
 }
 
 fn valid_identifier_char(c: char) -> bool {
-    c != '(' && c != ')' && !c.is_whitespace()
+    c != '(' && c != ')' && c != '{' && c != '}' && !c.is_whitespace()
 }
 
 fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
@@ -484,11 +485,19 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
             } else if c == ')' {
                 let v =
                     if let Some(ParseStackElement::List(v)) = stack.pop() {v}
-                    else {
-                        return Err(ParseError::Syntax("unexpected ')'"))
-                    };
+                    else { return Err(ParseError::Syntax("unexpected ')'")) };
                 peek.next()?;
                 Value::list(v)
+            } else if c == '{' {
+                stack.push(ParseStackElement::Map(HashMap::new(), None));
+                peek.next()?;
+                continue;
+            } else if c == '}' {
+                let h =
+                    if let Some(ParseStackElement::Map(h, None)) = stack.pop() {h}
+                    else { return Err(ParseError::Syntax("unexpected '}'")) };
+                peek.next()?;
+                Value::from(ValueData::Map(h))
             } else if c == '"' {
                 peek.next()?;
 
@@ -623,6 +632,15 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
             match stack.last_mut() {
                 Some(&mut ParseStackElement::List(ref mut v)) => {
                     v.push(res);
+                    break;
+                },
+                Some(&mut ParseStackElement::Map(ref mut m, ref mut s)) => {
+                    if let Some(k) = s.take() { m.insert(k, res); }
+                    else if let Some(h) = res.hash()? { *s = Some(h); }
+                    else {
+                        return Err(ParseError::from(EvalError::TypeError(
+                                String::from("unhashable key in map literal"))));
+                    }
                     break;
                 },
                 Some(&mut ParseStackElement::Quote) => {
