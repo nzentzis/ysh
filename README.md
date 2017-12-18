@@ -7,7 +7,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
 # Pending Tasks
     [ ] Core language support
     -[ ] Reader macros
-    -[ ] Hashmap type
+    -[X] Hashmap type
     -[ ] Arbitrary-precision arithmetic support in numeric tower
     -[ ] Guaranteed tail-call optimization
     -[X] Atoms

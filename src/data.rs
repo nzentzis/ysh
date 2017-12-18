@@ -131,6 +131,16 @@ pub trait ValueLike : Send + Sync {
     /// Convert a value into string form
     fn into_str(&self) -> Eval<String>;
 
+    /// Convert value into readable representation
+    ///
+    /// This is similar to `into_str`, but returns a string which suitable for
+    /// display to the user. This should be as close as possible to the value
+    /// specified by the user to *create* the value. For example:
+    ///
+    ///     (into_str "foobar") -> "foobar"
+    ///     (into_repr "foobar") -> "\"foobar\""
+    fn into_repr(&self) -> Eval<String> { self.into_str() }
+
     /// Convert a value into numeric form
     fn into_num(&self) -> Eval<Option<Number>> { Ok(None) }
 
@@ -489,8 +499,8 @@ impl ValueLike for Value {
             &ValueData::Map(ref m) => {
                 let mut items = Vec::new();
                 for (k,v) in m {
-                    items.push(k.val.into_str()?);
-                    items.push(v.into_str()?);
+                    items.push(k.val.into_repr()?);
+                    items.push(v.into_repr()?);
                 }
 
                 let mut s = String::with_capacity(128);
@@ -515,6 +525,13 @@ impl ValueLike for Value {
             }),
             &ValueData::Macro(_)            => Ok(String::from("<macro>")),
             &ValueData::Polymorphic(ref v)  => v.into_str()
+        }
+    }
+
+    fn into_repr(&self) -> Eval<String> {
+        match &self.data {
+            &ValueData::Str(ref s) => Ok(format!("\"{}\"", s)),
+            _ => self.into_str()
         }
     }
 
