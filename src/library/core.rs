@@ -57,6 +57,14 @@ semantics as 'do'.");
         .desc("Generates a function using all arguments after the first, then \
                stores it in the first symbol. Function creation works as with \
                `fn` and definition works as with `def`.");
+
+    static ref DOC_SOURCE: Documentation = Documentation::new()
+        .form(&["filelike", "filelike*"])
+        .short("Read and execute code from files or streams")
+        .desc("Convert arguments to streams (opening files by name as read-only \
+               in the process if necessary) and repeatedly read forms from \
+               them using the normal Lisp reader, evaluating each form as it \
+               is read. Passed forms are sourced in order.");
 }
 
 /// if the first arg is truthy, evaluate and yield the second arg. Otherwise,
@@ -445,6 +453,36 @@ fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
     */
 }
 
+/// Repeatedly read forms from files and evaluate them. Return ().
+pub fn fn_source(env: &Environment, args: &[Value]) -> EvalResult {
+    use std::fs;
+    use ::reader::ParseError;
+
+    for a in args.iter() {
+        // TODO: handle file conversions
+        let fname = a.into_str()?;
+        let f = fs::OpenOptions::new()
+                 .read(true)
+                 .open(fname);
+        match f {
+            Ok(mut f) => {
+                loop {
+                    let m = ::reader::read(&mut f);
+                    match m {
+                        Ok(r) => {r.evaluate(env)?;},
+                        Err(e) => if let ParseError::UnexpectedEOF = e {break;}
+                                  else {return Err(EvalError::Runtime(
+                                              format!("read error: {}", e)));}
+                    }
+                }
+            },
+            Err(e) => return Err(EvalError::IO(e))
+        }
+    }
+
+    Ok(Value::empty())
+}
+
 pub fn initialize() {
     let env = global();
 
@@ -470,7 +508,9 @@ pub fn initialize() {
     env.set("defn", Value::from(Executable::CoreFn(core_defn))
                           .document(&DOC_DEFN));
     env.set("eval", Value::from(Executable::native(core_eval)));
-    env.set("doc", Value::from(Executable::native(fn_man)))
+    env.set("doc", Value::from(Executable::native(fn_man)));
+    env.set("source", Value::from(Executable::native(fn_source))
+                            .document(&DOC_SOURCE));
 }
 
 /// Generate a value with the passed args wrapped in a call to `quote`
