@@ -26,6 +26,7 @@ mod input;
 #[allow(dead_code)] mod jobs;
 mod evaluate;
 #[allow(dead_code)] mod pipeline;
+mod history;
 
 use std::io;
 use std::process::exit;
@@ -269,6 +270,8 @@ fn main() {
             Ok(x)  => x,
             Err(_) => unimplemented!()
         };
+
+        history::db().record(&cmd);
 
         let plan = match Plan::plan_for(cmd) {
             Ok(r) => r,

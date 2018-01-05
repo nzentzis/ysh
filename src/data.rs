@@ -842,6 +842,23 @@ pub struct PipelineComponent {
     pub link: Option<PipeMode>,
 }
 
+impl PipelineComponent {
+    pub fn into_repr(&self) -> String {
+        let mut s = self.xform.0.iter()
+                        .map(|x| x.into_repr().unwrap())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+        match self.link {
+            Some(PipeMode::Pipe) => s.push_str(" | "),
+            Some(PipeMode::DelimitedPipe(c)) => s.push_str(&format!(" |{}> ", c)),
+            Some(PipeMode::PipeText) => s.push_str(" |> "),
+            None => {}
+        }
+
+        s
+    }
+}
+
 #[derive(PartialEq, Clone, Debug)]
 pub struct Pipeline {
     /// List of pipeline stages
@@ -849,4 +866,31 @@ pub struct Pipeline {
 
     /// Pipeline-global routing components
     pub terminals: Vec<TerminalMode>
+}
+
+impl Pipeline {
+    pub fn into_repr(&self) -> String {
+        let mut r = self.elements.iter()
+                        .map(|x| x.into_repr())
+                        .collect::<Vec<_>>()
+                        .join("");
+        for t in self.terminals.iter() {
+            match t {
+                &TerminalMode::ReplaceFile(ref s) =>
+                    r.push_str(&format!(" > {}", s)),
+                &TerminalMode::AppendFile(ref s) =>
+                    r.push_str(&format!(" >> {}", s)),
+                &TerminalMode::SetVariable(ref id) =>
+                    r.push_str(&format!(" >= {}", id.as_ref())),
+                &TerminalMode::AppendVariable(ref id) =>
+                    r.push_str(&format!(" >>= {}", id.as_ref())),
+                &TerminalMode::InputFile(ref s) =>
+                    r.push_str(&format!(" < {}", s)),
+                &TerminalMode::InputVar(ref id) =>
+                    r.push_str(&format!(" <= {}", id.as_ref())),
+            }
+        }
+
+        r
+    }
 }

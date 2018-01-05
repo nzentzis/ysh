@@ -171,20 +171,17 @@ impl EditBuffer {
         // at end
         if self.cursor == 0 { // beginning
             // just prepend
-            println!("at start");
             let mut v = Vec::with_capacity(self.buf.len() + text_len);
             v.extend(text.as_ref().chars());
             v.append(&mut self.buf);
             self.buf = v;
         } else if self.at_end() { // end
             // append into our vector
-            println!("at end");
             self.buf.reserve_exact(text_len);
             self.buf.extend(text.as_ref().chars());
         } else { // middle
             // split our vector in half, append to the first, then reapply the
             // second part
-            println!("at middle");
             let mut later = self.buf.split_off(self.cursor);
             self.buf.reserve_exact(later.len() + text_len);
             self.buf.extend(text.as_ref().chars());

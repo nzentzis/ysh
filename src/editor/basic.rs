@@ -1,13 +1,17 @@
 use termion::event::Key;
 
+use history;
 use editor::*;
 
 pub struct Editor {
+    history_idx: Option<usize>
 }
 
 impl Editor {
     pub fn new() -> Self {
-        Editor {}
+        Editor {
+            history_idx: None
+        }
     }
 }
 
@@ -21,6 +25,36 @@ impl EditingDiscipline for Editor {
             &Key::Right => {
                 buf.move_cursor(1);
                 true
+            },
+            &Key::Up => {
+                if self.history_idx.unwrap_or(0) < (history::db().len()-1) {
+                    self.history_idx = Some(self.history_idx
+                                                .map(|x| x+1)
+                                                .unwrap_or(0));
+                    let s = history::db().get(self.history_idx.unwrap());
+                    buf.clear();
+                    buf.insert(s.into_repr());
+                    true
+                } else {
+                    false
+                }
+            },
+            &Key::Down => {
+                if let Some(i) = self.history_idx {
+                    if i == 0 {
+                        self.history_idx = None;
+                        buf.clear();
+                        true
+                    } else {
+                        self.history_idx = Some(i-1);
+                        let s = history::db().get(self.history_idx.unwrap());
+                        buf.clear();
+                        buf.insert(s.into_repr());
+                        true
+                    }
+                } else {
+                    false
+                }
             },
             &Key::Home => {
                 buf.set_cursor(0);
