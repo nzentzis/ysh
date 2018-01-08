@@ -12,8 +12,8 @@ impl BindingProxy for HistoryProxy {
         let values = DB.snapshot()
             .into_iter()
             .map(|entry| {
-                Value::map(vec![
-                    (Value::atom_hash("cmd"), entry.command.structure.into_obj()),
+                Value::atom_map(vec![
+                    ("cmd", entry.command.structure.into_obj()),
                 ])
             });
         Value::list(values)

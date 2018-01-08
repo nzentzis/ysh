@@ -367,6 +367,14 @@ impl Value {
         Value::from(ValueData::Map(i.into_iter().collect::<HashMap<_,_>>()))
     }
 
+    /// Utility function to build a hashmap with atom keys
+    pub fn atom_map<S, I>(i: I) -> Value 
+            where S: AsRef<str>,
+                  I: IntoIterator<Item=(S, Value)> {
+        Value::map(i.into_iter()
+                    .map(|(s,v)| (Value::atom(s).hash().unwrap().unwrap(), v)))
+    }
+
     /// Perform macro expansion on the contained form
     pub fn macroexpand(self) -> EvalResult {
         match self.data {
