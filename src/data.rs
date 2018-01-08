@@ -263,8 +263,21 @@ impl PartialEq for ValueHash {
 
 impl Eq for ValueHash {}
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct SourcePoint {
+    line: usize,
+    col: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct SourceRegion {
+    start: SourcePoint,
+    end: SourcePoint
+}
+
 #[derive(Clone, Debug)]
 pub struct Value {
+    pub loc: Option<SourceRegion>,
     pub data: ValueData,
     pub name: Option<Identifier>,
     pub doc: Option<&'static Documentation>
@@ -283,9 +296,16 @@ impl Value {
         self
     }
 
+    /// Set the location of a value
+    pub fn locate(mut self, l: SourceRegion) -> Value {
+        self.loc = Some(l);
+        self
+    }
+
     /// Generate an empty value
     pub fn empty() -> Value {
         Value {
+            loc: None,
             data: ValueData::List(Vec::new()),
             name: None,
             doc: None
@@ -295,6 +315,7 @@ impl Value {
     /// Generate an empty value
     pub fn new<T: ValueLike+'static>(x: T) -> Value {
         Value {
+            loc: None,
             data: ValueData::Polymorphic(Arc::new(x)),
             name: None,
             doc: None
@@ -304,6 +325,7 @@ impl Value {
     /// Build a new list value
     pub fn list<I: IntoIterator<Item=Value>>(i: I) -> Value {
         Value {
+            loc: None,
             data: ValueData::List(i.into_iter().collect()),
             name: None,
             doc: None
@@ -313,6 +335,7 @@ impl Value {
     /// Build a string value
     pub fn str<S: ::std::borrow::Borrow<str>>(s: S) -> Value {
         Value {
+            loc: None,
             data: ValueData::Str(s.borrow().to_owned()),
             name: None,
             doc: None
@@ -322,6 +345,7 @@ impl Value {
     /// Build an atom
     pub fn atom<S: AsRef<str>>(s: S) -> Value {
         Value {
+            loc: None,
             data: ValueData::Atom(Arc::new(String::from(s.as_ref()))),
             name: None,
             doc: None
@@ -410,6 +434,7 @@ impl Value {
 impl From<Executable> for Value {
     fn from(e: Executable) -> Value {
         Value {
+            loc: None,
             data: ValueData::Function(e),
             name: None,
             doc: None
@@ -420,6 +445,7 @@ impl From<Executable> for Value {
 impl From<Number> for Value {
     fn from(n: Number) -> Value {
         Value {
+            loc: None,
             data: ValueData::Number(n),
             name: None,
             doc: None
@@ -430,6 +456,7 @@ impl From<Number> for Value {
 impl From<Identifier> for Value {
     fn from(i: Identifier) -> Value {
         Value {
+            loc: None,
             data: ValueData::Symbol(i),
             name: None,
             doc: None
@@ -440,6 +467,7 @@ impl From<Identifier> for Value {
 impl From<bool> for Value {
     fn from(x: bool) -> Value {
         Value {
+            loc: None,
             data: ValueData::Boolean(x),
             name: None,
             doc: None
@@ -449,7 +477,7 @@ impl From<bool> for Value {
 
 impl From<ValueData> for Value {
     fn from(x: ValueData) -> Value {
-        Value {data: x, name: None, doc: None}
+        Value {loc: None, data: x, name: None, doc: None}
     }
 }
 

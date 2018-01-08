@@ -434,12 +434,39 @@ fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
     Ok(Identifier::from(s))
 }
 
+/// Reader configuration structure
+struct ReadOptions {
+    /// Automatically insert closing parens to make a complete structure
+    autoclose: bool,
+
+    /// Allow newlines
+    newlines: bool
+}
+
+impl ReadOptions {
+    /// Generate options suitable for normal use
+    fn default() -> Self {
+        ReadOptions {
+            autoclose: false,
+            newlines: true
+        }
+    }
+
+    /// Generate options suitable for use in a pipeline
+    fn pipeline() -> Self {
+        ReadOptions {
+            autoclose: false,
+            newlines: false
+        }
+    }
+}
+
 /// Read a Lisp form from the given input stream
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
 fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
-                          allow_newlines: bool) -> Parse<(Value)> {
+                          conf: ReadOptions) -> Parse<(Value)> {
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
 
@@ -447,7 +474,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
     let mut in_lambda = false;
     let mut lambda_args: i32 = 0; // -1 for a single $, 0 for unset, >0 for $N form
 
-    loop {
+    let result = loop {
         // read a character
         let c = loop {
             let c = peek.peek().map(Some)
@@ -455,7 +482,7 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
                        if e.kind() == io::ErrorKind::UnexpectedEof { Ok(None) }
                        else { Err(e) }})?;
             if !c.map(|x| x.is_whitespace() &&
-                          !(x == '\n' && !allow_newlines))
+                          !(x == '\n' && !conf.newlines))
                  .unwrap_or(false) { break c }
 
             // skip whitespace
@@ -464,13 +491,13 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
 
         let c = if let Some(c) = c { c } else {
             // handle EOF
-            return Err(ParseError::UnexpectedEOF);
+            break Err(ParseError::UnexpectedEOF);
         };
 
         // if we got here, we're not allowing newlines - treat this just like
         // EOF
         if c == '\n' {
-            return Err(ParseError::UnexpectedEOF);
+            break Err(ParseError::UnexpectedEOF);
         }
 
         // use a reader macro if applicable
@@ -676,7 +703,58 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
             }
             stack.pop();
         }
+    };
+
+    if let Err(ParseError::UnexpectedEOF) = result {
+        // handle autoclose
+        if conf.autoclose {
+            let mut res = None;
+            while let Some(obj) = stack.pop() {
+                match obj {
+                    ParseStackElement::List(mut v) => {
+                        if let Some(res) = res {
+                            v.push(res);
+                        }
+                        res = Some(Value::list(v));
+                    },
+                    ParseStackElement::Map(mut m, mut s) => {
+                        if let Some(res) = res {
+                            if let Some(k) = s.take() {
+                                m.insert(k, res);
+                            }
+                        }
+                        res = Some(Value::map(m));
+                    },
+                    ParseStackElement::Quote => {
+                        continue;
+                    },
+                    ParseStackElement::Lambda => {
+                        // construct an appropriate lambda function
+                        let args = {
+                            if lambda_args == -1 {
+                                vec![Value::from(Identifier::new("$"))]
+                            } else {
+                                (0..lambda_args).into_iter()
+                                                .map(|x| format!("${}", x+1))
+                                                .map(Identifier::new)
+                                                .map(Value::from)
+                                                .collect::<Vec<_>>()
+                            }
+                        };
+                        res = Some(Value::list(vec![
+                            Value::from(Identifier::new("fn")),
+                            Value::list(args),
+                            res.unwrap()
+                        ]));
+                    },
+                }
+            }
+            if let Some(res) = res {
+                return Ok(res);
+            }
+        }
     }
+    result
 }
 
 /// Read a Lisp form from the given input stream
@@ -685,7 +763,15 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
 /// pair. In most cases the unconsumed character can be ignored.
 pub fn read<R: Read>(strm: &mut R) -> Parse<Value> {
     let mut peek = PeekReadChars::new(strm);
-    internal_read(&mut peek, true)
+    internal_read(&mut peek, ReadOptions::default())
+}
+
+/// Read a Lisp form, autoclosing if needed
+pub fn read_autoclose<R: Read>(strm: &mut R) -> Parse<Value> {
+    let mut peek = PeekReadChars::new(strm);
+    let mut opts = ReadOptions::default();
+    opts.autoclose = true;
+    internal_read(&mut peek, opts)
 }
 
 /// Read a pipeline from the given input stream
@@ -731,7 +817,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
     let mut in_done = false;
 
     loop {
-        let tok = internal_read(&mut peek, false).map(Some)
+        let tok = internal_read(&mut peek, ReadOptions::pipeline()).map(Some)
                  .or_else(|e| match e {
                      ParseError::UnexpectedEOF => Ok(None),
                      e => Err(e)
