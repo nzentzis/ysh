@@ -196,6 +196,9 @@ fn init_environment() {
 
     // create virtual environment map
     env.set_proxy("env", EnvProxy::new());
+
+    // create virtual history list
+    env.set_proxy("history", history::HistoryProxy{});
 }
 
 fn init_process_group() -> Result<(), nix::Error> {

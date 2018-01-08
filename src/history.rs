@@ -4,12 +4,19 @@ use std::time::SystemTime;
 use data::*;
 use environment::{global, BindingProxy};
 
-struct HistoryProxy {
+pub struct HistoryProxy {
 }
 
 impl BindingProxy for HistoryProxy {
     fn get(&self) -> Value {
-        unimplemented!()
+        let values = DB.snapshot()
+            .into_iter()
+            .map(|entry| {
+                Value::map(vec![
+                    (Value::atom_hash("cmd"), entry.command.structure.into_obj()),
+                ])
+            });
+        Value::list(values)
     }
 
     fn set(&self, val: Value) {
@@ -239,6 +246,12 @@ impl Database {
     pub fn get(&self, i: usize) -> Pipeline {
         let v = self.values.lock().unwrap();
         v[(v.len()-1)-i].command.structure.to_owned()
+    }
+
+    /// Get a snapshot of all historical entries
+    pub fn snapshot(&self) -> Vec<Arc<Entry>> {
+        let v = self.values.lock().unwrap();
+        v.to_owned()
     }
 
     /// Add a value to the history database

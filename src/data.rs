@@ -352,6 +352,16 @@ impl Value {
         }
     }
 
+    /// Build a hashed atom
+    pub fn atom_hash<S: AsRef<str>>(s: S) -> ValueHash {
+        Value {
+            loc: None,
+            data: ValueData::Atom(Arc::new(String::from(s.as_ref()))),
+            name: None,
+            doc: None
+        }.hash().unwrap().unwrap()
+    }
+
     /// Build a hashmap
     pub fn map<I: IntoIterator<Item=(ValueHash, Value)>>(i: I) -> Value {
         Value::from(ValueData::Map(i.into_iter().collect::<HashMap<_,_>>()))
@@ -428,6 +438,47 @@ impl Value {
             hash: hasher.finish(),
             val: self.to_owned()
         }))
+    }
+}
+
+pub trait ToValueHash {
+    fn to_value_hash(self) -> ValueHash;
+}
+
+impl ToValueHash for bool {
+    fn to_value_hash(self) -> ValueHash {
+        Value::from(self).hash().unwrap().unwrap()
+    }
+}
+
+impl ToValueHash for Number {
+    fn to_value_hash(self) -> ValueHash {
+        Value::from(self).hash().unwrap().unwrap()
+    }
+}
+
+impl<'a> ToValueHash for &'a str {
+    fn to_value_hash(self) -> ValueHash {
+        Value::str(self).hash().unwrap().unwrap()
+    }
+}
+
+impl<'a> ToValueHash for &'a String {
+    fn to_value_hash(self) -> ValueHash {
+        Value::str(self.as_ref()).hash().unwrap().unwrap()
+    }
+}
+
+impl ToValueHash for Identifier {
+    fn to_value_hash(self) -> ValueHash {
+        Value::from(self).hash().unwrap().unwrap()
+    }
+}
+
+impl<V: ToValueHash> ToValueHash for Vec<V> {
+    fn to_value_hash(self) -> ValueHash {
+        Value::list(self.into_iter().map(|x| x.to_value_hash().val))
+              .hash().unwrap().unwrap()
     }
 }
 
@@ -920,5 +971,45 @@ impl Pipeline {
         }
 
         r
+    }
+
+    pub fn into_obj(&self) -> Value {
+        let mut v = Vec::new();
+        for e in self.elements.iter() {
+            v.push(Value::list(e.xform.0.iter().cloned()));
+            match e.link {
+                None => {},
+                Some(PipeMode::Pipe) => v.push(Value::atom("pipe")),
+                Some(PipeMode::PipeText) => v.push(Value::atom("pipe-text")),
+                Some(PipeMode::DelimitedPipe(c)) =>
+                    v.push(Value::list(vec![Value::atom("pipe-delim"),
+                                            Value::str(format!("{}", c))])),
+            }
+        }
+
+        for t in self.terminals.iter() {
+            v.push(match t {
+                &TerminalMode::ReplaceFile(ref s) =>
+                    Value::list(vec![Value::atom("replace-file"),
+                                     Value::str(s.as_ref())]),
+                &TerminalMode::AppendFile(ref s) =>
+                    Value::list(vec![Value::atom("into-file"),
+                                     Value::str(s.as_ref())]),
+                &TerminalMode::SetVariable(ref id) =>
+                    Value::list(vec![Value::atom("replace-var"),
+                                     Value::from(id.clone())]),
+                &TerminalMode::AppendVariable(ref id) =>
+                    Value::list(vec![Value::atom("into-var"),
+                                     Value::from(id.clone())]),
+                &TerminalMode::InputFile(ref s) =>
+                    Value::list(vec![Value::atom("input-file"),
+                                     Value::str(s.as_ref())]),
+                &TerminalMode::InputVar(ref id) =>
+                    Value::list(vec![Value::atom("input-var"),
+                                     Value::from(id.clone())]),
+            });
+        }
+
+        Value::list(v)
     }
 }
