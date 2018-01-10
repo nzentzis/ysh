@@ -66,8 +66,8 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     --[ ] Expose to user code
     --[ ] Allow completion overrides from user code
     [ ] History support
-    -[ ] Store commands in history
-    -[ ] Expose to user code
+    -[X] Store commands in history
+    -[X] Expose to user code
     -[ ] Built-in support for recall and search
     -[ ] Semantic history (store/expose as values, search by filter)
     -[ ] Store previous command results
