@@ -167,6 +167,7 @@ fn init_environment() {
     env.set("shell/locate", Value::from(
         Executable::native(locate_executable)));
 
+    /*
     env.set("try-read", Value::from(
         Executable::native(|_,_| reader::read(&mut ::std::io::stdin())
                                 .map_err(ParseError::to_eval)
@@ -180,6 +181,7 @@ fn init_environment() {
                                 })
                                 .map_err(ParseError::to_eval)
                            )));
+    */
 
     env.set("exit", Value::from(Executable::native(|_,_| {
             RUN_SHELL.store(false, Ordering::Relaxed);

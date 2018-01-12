@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use environment::*;
 use data::*;
+use stream::ReadWrapper;
 
 lazy_static! {
     static ref DOC_IF: Documentation = Documentation::new()
@@ -467,7 +468,7 @@ pub fn fn_source(env: &Environment, args: &[Value]) -> EvalResult {
         match f {
             Ok(mut f) => {
                 loop {
-                    let m = ::reader::read(&mut f);
+                    let m = ::reader::read(&mut ReadWrapper::new(&mut f));
                     match m {
                         Ok(r) => {r.evaluate(env)?;},
                         Err(e) => if let ParseError::UnexpectedEOF = e {break;}

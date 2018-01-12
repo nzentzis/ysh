@@ -6,6 +6,7 @@ use termion::*;
 use termion::raw::IntoRawMode;
 use termion::input::TermRead;
 
+use stream::ReadWrapper;
 use data::*;
 use reader::read_pipeline;
 use editor::{LineEditor, EditingDiscipline};
@@ -95,7 +96,7 @@ impl<'a> ActiveEditor<'a> {
                     let mut s = io::Cursor::new(r);
 
                     // need to add \r here since we're still in raw mode
-                    match read_pipeline(&mut s) {
+                    match read_pipeline(&mut ReadWrapper::new(&mut s)) {
                         Ok(r) => return Ok(r),
                         Err(e) => {
                             println!("ysh: {}\r", e);

@@ -5,6 +5,7 @@ use std::boxed::Box;
 use span::*;
 use data::*;
 use numeric::*;
+use super::CharStream;
 
 #[derive(Clone, Copy, Debug)]
 /// Options structure to use when generating a new polymorphic stream structure.
@@ -137,6 +138,20 @@ impl PolyStream {
                 stream: strm
             }
         })
+    }
+}
+
+impl CharStream for PolyStream {
+    fn peek(&mut self) -> io::Result<char> {
+        unimplemented!()
+    }
+
+    fn next(&mut self) -> io::Result<char> {
+        unimplemented!()
+    }
+
+    fn push(&mut self, c: char) {
+        unimplemented!()
     }
 }
 
@@ -560,3 +575,4 @@ mod test {
                     vec!["1234", "abcd", "1.24", "6-7i"]);
     }
 }
+

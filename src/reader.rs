@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use data::*;
 use numeric::*;
+use stream::{CharStream, ReadWrapper};
 
 lazy_static! {
     // read table
@@ -78,93 +79,10 @@ impl From<EvalError> for ParseError {
 
 pub type Parse<T> = Result<T, ParseError>;
 
-/// Reads a UTF-8 character from the given stream
-/// 
-/// # Errors
-/// If this encounters an I/O error, it will fail with that result. If it finds
-/// an EOF before the end of the character, it will ignore the read bytes and
-/// return an `io::ErrorKind::UnexpectedEof`.
-/// 
-/// If the bytes aren't valid UTF-8, this will return an error of kind
-/// `io::ErrorKind::InvalidData`.
-fn read_utf8<R: Read>(strm: &mut R) -> io::Result<char> {
-    let mut buf = [0u8;4];
-
-    strm.read_exact(&mut buf[..1])?;
-
-    let num_ones = {
-        let mut n = 0;
-        let b = buf[0];
-        for i in 0..3 {
-            // check that the bit N from the left is one
-            if (b >> (7 - i)) & 1 == 0 { break }
-
-            n += 1;
-        }
-
-        // double check that it's valid
-        if (b >> (7 - n)) & 1 != 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                       "encountered invalid UTF-8 sequence"));
-        }
-
-        n
-    };
-
-    // get enough data
-    let needed = if num_ones == 0 { 0 } else { num_ones-1 };
-    strm.read_exact(&mut buf[1..needed+1])?;
-
-    if let Ok(s) = str::from_utf8(&buf[..needed+1]) {
-        if let Some(r) = s.chars().next() { Ok(r) }
-        else { Err(io::Error::new(io::ErrorKind::InvalidData,
-                       "encountered invalid UTF-8 sequence")) }
-    } else {
-        Err(io::Error::new(io::ErrorKind::InvalidData,
-                       "encountered invalid UTF-8 sequence"))
-    }
-}
-
-struct PeekReadChars<'a, R: Read + 'a> {
-    peek: Vec<char>, // index 0 is the read point, new data goes at end
-    strm: &'a mut R
-}
-
-impl<'a, R: Read> PeekReadChars<'a, R> {
-    /// Build a new peek stream
-    fn new(strm: &'a mut R) -> Self {
-        PeekReadChars { peek: Vec::new(), strm }
-    }
-
-    /// Read a new character into the peek buffer
-    fn make_avail(&mut self) -> io::Result<()> {
-        let c = read_utf8(&mut self.strm)?;
-        self.peek.push(c);
-        Ok(())
-    }
-
-    /// Get the next character from the input stream
-    fn peek(&mut self) -> io::Result<char> {
-        if self.peek.is_empty() { self.make_avail()?; }
-        Ok(self.peek[0])
-    }
-
-    /// Consume a character from the input stream
-    fn next(&mut self) -> io::Result<char> {
-        if self.peek.is_empty() { read_utf8(&mut self.strm) }
-        else { Ok(self.peek.remove(0)) }
-    }
-
-    /// Push a value back into the stream
-    fn push(&mut self, c: char) {
-        self.peek.insert(0, c);
-    }
-}
-
 /// Read a numeric value from the given input stream
 /// 
 /// Upon read failure, push the chars back into the peek stream
-fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Parse<Number> {
+fn read_number<R: CharStream>(strm: &mut R) -> Parse<Number> {
     #[derive(Debug)]
     enum St {
         S,
@@ -402,14 +320,14 @@ fn read_number<R: Read>(strm: &mut PeekReadChars<R>) -> Parse<Number> {
 pub fn parse_number(x: &[u8]) -> Parse<Number> {
     use std::io::Cursor;
 
-    read_number(&mut PeekReadChars::new(&mut Cursor::new(x)))
+    read_number(&mut ReadWrapper::new(&mut Cursor::new(x)))
 }
 
 fn valid_identifier_char(c: char) -> bool {
     c != '(' && c != ')' && c != '{' && c != '}' && !c.is_whitespace()
 }
 
-fn read_identifier<R: Read>(peek: &mut PeekReadChars<R>) -> Parse<Identifier> {
+fn read_identifier<R: CharStream>(peek: &mut R) -> Parse<Identifier> {
     let c = peek.next()?;
 
     let mut s = String::with_capacity(32);
@@ -465,8 +383,7 @@ impl ReadOptions {
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
-                          conf: ReadOptions) -> Parse<(Value)> {
+fn internal_read<R: CharStream>(peek: &mut R, conf: ReadOptions) -> Parse<(Value)> {
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
 
@@ -761,29 +678,26 @@ fn internal_read<R: Read>(peek: &mut PeekReadChars<R>,
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-pub fn read<R: Read>(strm: &mut R) -> Parse<Value> {
-    let mut peek = PeekReadChars::new(strm);
-    internal_read(&mut peek, ReadOptions::default())
+pub fn read<R: CharStream>(strm: &mut R) -> Parse<Value> {
+    internal_read(strm, ReadOptions::default())
 }
 
 /// Read a Lisp form, autoclosing if needed
-pub fn read_autoclose<R: Read>(strm: &mut R) -> Parse<Value> {
-    let mut peek = PeekReadChars::new(strm);
+pub fn read_autoclose<R: CharStream>(strm: &mut R) -> Parse<Value> {
     let mut opts = ReadOptions::default();
     opts.autoclose = true;
-    internal_read(&mut peek, opts)
+    internal_read(strm, opts)
 }
 
 /// Read a pipeline from the given input stream
 /// 
 /// This just reads forms from the input and processes them into a pipeline.
 /// Reader macros run *before* this sees the forms.
-pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
+pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
     let mut pipeline = Pipeline {
         elements: Vec::new(),
         terminals: Vec::new()
     };
-    let mut peek = PeekReadChars::new(strm);
 
     fn get_pipe(id: &Identifier) -> Option<PipeMode> {
         let s: &str = id.as_ref();
@@ -817,7 +731,7 @@ pub fn read_pipeline<R: Read>(strm: &mut R) -> Parse<Pipeline> {
     let mut in_done = false;
 
     loop {
-        let tok = internal_read(&mut peek, ReadOptions::pipeline()).map(Some)
+        let tok = internal_read(strm, ReadOptions::pipeline()).map(Some)
                  .or_else(|e| match e {
                      ParseError::UnexpectedEOF => Ok(None),
                      e => Err(e)
