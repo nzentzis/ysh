@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use environment::Environment;
 use numeric::*;
+use stream::StreamWrapper;
 
 #[derive(Clone)]
 pub enum Executable {
@@ -117,6 +118,14 @@ pub trait ValueLike : Send + Sync {
     /// Like `get_symbol`, this shouldn't do any conversions
     fn get_string(&self) -> Eval<Option<String>> { Ok(None) }
 
+    /// Try converting into a `StreamWrapper` with the given parameters
+    ///
+    /// The `r` and `w` parameters control whether the stream should be opened
+    /// in read or write mode.
+    fn into_raw_stream(&self, r: bool, w: bool) -> Eval<StreamWrapper> {
+        Err(EvalError::TypeError(String::from("cannot convert object into stream")))
+    }
+
     /// Convert into a sequential form
     /// 
     /// This must be equivalent to calling `self.into_iter().collect()`
@@ -183,6 +192,7 @@ pub enum ValueData {
     List(Vec<Value>),
     Function(Executable),
     Macro(Executable),
+    RawStream(StreamWrapper),
     Polymorphic(Arc<ValueLike + 'static>),
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
@@ -327,6 +337,16 @@ impl Value {
         Value {
             loc: None,
             data: ValueData::List(i.into_iter().collect()),
+            name: None,
+            doc: None
+        }
+    }
+
+    /// Build a stream value
+    pub fn raw_stream(strm: StreamWrapper) -> Value {
+        Value {
+            loc: None,
+            data: ValueData::RawStream(strm),
             name: None,
             doc: None
         }
@@ -554,6 +574,39 @@ impl ValueLike for Value {
         else { Ok(None) }
     }
 
+    fn into_raw_stream(&self, r: bool, w: bool) -> Eval<StreamWrapper> {
+        if !r && !w {
+            panic!("Cannot generate stream without r or w ability");
+        }
+
+        let fname = match &self.data {
+            &ValueData::RawStream(ref s) => {
+                // make sure the permissions are compatible
+                if (r & s.is_readable() != r) || (w & s.is_writable() != w) {
+                    return Err(EvalError::TypeError(String::from(
+                                "incompatible stream capabilities")));
+                } else {
+                    return Ok(s.to_owned());
+                }
+            },
+            &ValueData::Str(ref s) => s.to_owned(),
+            &ValueData::Symbol(ref id) => id.as_ref().to_owned(),
+            &ValueData::Atom(ref id) => id.as_ref().to_owned(),
+            _ => return Err(EvalError::TypeError(String::from(
+                        "cannot convert type to raw stream")))
+        };
+
+        // try opening the file
+        use std::fs::OpenOptions;
+        let f = OpenOptions::new().read(r).write(w).create(w).open(fname)?;
+        match (r,w) {
+            (true,false) => Ok(StreamWrapper::new_read(f)),
+            (false,true) => Ok(StreamWrapper::new_write(f)),
+            (true,true) => Ok(StreamWrapper::new_rw(f)),
+            _ => unreachable!()
+        }
+    }
+
     fn into_seq(&self) -> Eval<Vec<Value>> {
         if let &ValueData::List(ref l) = &self.data {
             Ok(l.to_owned())
@@ -611,6 +664,11 @@ impl ValueLike for Value {
                 &Some(ref s) => format!("<fn '{}'>", s.as_ref()),
             }),
             &ValueData::Macro(_)            => Ok(String::from("<macro>")),
+            &ValueData::RawStream(ref s) => {
+                // TODO: use a more meaningful representation. maybe add to the
+                //       stream API?
+                Ok(String::from("<raw stream object>"))
+            }
             &ValueData::Polymorphic(ref v)  => v.into_str()
         }
     }
@@ -648,6 +706,7 @@ impl ValueLike for Value {
                                          .any(|x| x) }),
             &ValueData::Function(_)         => Ok(true),
             &ValueData::Macro(_)            => Ok(true),
+            &ValueData::RawStream(_)        => Ok(true),
             &ValueData::Polymorphic(ref v)  => v.into_bool()
         }
     }
@@ -866,6 +925,7 @@ impl fmt::Debug for ValueData {
             &ValueData::List(ref v)    => write!(f, "{:?}", v),
             &ValueData::Function(_)    => write!(f, "<function>"),
             &ValueData::Macro(_)       => write!(f, "<macro>"),
+            &ValueData::RawStream(_)   => write!(f, "<raw stream>"),
             &ValueData::Polymorphic(_) => write!(f, "<polymorphic>"),
         }
     }

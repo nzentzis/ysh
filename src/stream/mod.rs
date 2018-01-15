@@ -5,6 +5,7 @@ pub use self::poly::*;
 use std::str;
 use std::io;
 use std::io::prelude::*;
+use std::sync::{Arc, Mutex};
 
 /// Reads a UTF-8 character from the given stream
 /// 
@@ -104,5 +105,54 @@ impl<'a, R: Read> CharStream for ReadWrapper<'a, R> {
     /// Push a value back into the stream
     fn push(&mut self, c: char) {
         self.peek.insert(0, c);
+    }
+}
+
+trait ReadWrite : Read + Write {
+}
+
+impl<T: Read+Write> ReadWrite for T {}
+
+#[derive(Clone)]
+/// Opaque stream wrapper which can contain either `Read` or `Write` streams
+enum StreamWrap {
+    R(Arc<Mutex<Box<Read + Send>>>),
+    W(Arc<Mutex<Box<Write + Send>>>),
+    RW(Arc<Mutex<Box<ReadWrite + Send>>>)
+}
+
+impl StreamWrap {
+    fn get_rw_mode(&self) -> (bool,bool) {
+        match self {
+            &StreamWrap::R(_)  => (true,false),
+            &StreamWrap::W(_)  => (false,true),
+            &StreamWrap::RW(_) => (true,true),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct StreamWrapper(StreamWrap);
+
+impl StreamWrapper {
+    /// Return whether this stream can be read from
+    pub fn is_readable(&self) -> bool { self.0.get_rw_mode().0 }
+
+    /// Return whether this stream can be written to
+    pub fn is_writable(&self) -> bool { self.0.get_rw_mode().1 }
+
+    /// Create a read-only stream wrapper
+    pub fn new_read<S: Read + Send + 'static>(r: S) -> Self {
+        StreamWrapper(StreamWrap::R(Arc::new(Mutex::new(Box::new(r)))))
+    }
+
+    /// Create a write-only stream wrapper
+    pub fn new_write<S: Write + Send + 'static>(r: S) -> Self {
+        StreamWrapper(StreamWrap::W(Arc::new(Mutex::new(Box::new(r)))))
+    }
+
+    /// Create a read-only stream wrapper
+    pub fn new_rw<S: Read + Write + Send + 'static>(r: S) -> Self {
+        StreamWrapper(StreamWrap::RW(Arc::new(Mutex::new(Box::new(r)))))
     }
 }

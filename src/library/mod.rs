@@ -5,6 +5,7 @@ mod sequence;
 mod async;
 mod filesystem;
 mod builtins;
+mod io;
 
 pub fn initialize() {
     core::initialize();
@@ -14,4 +15,5 @@ pub fn initialize() {
     sequence::initialize();
     async::initialize();
     filesystem::initialize();
+    io::initialize();
 }
