@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Weak, Mutex, RwLock};
 use std::boxed::Box;
 use std::collections::HashMap;
 
@@ -962,16 +962,49 @@ pub enum PipeMode {
     PipeText // |> - pipe without semantic interpretation
 }
 
+lazy_static! {
+    static ref IDENT_INTERN_TBL: RwLock<HashMap<String, Weak<String>>>
+        = RwLock::new(HashMap::new());
+}
+
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Identifier(pub Arc<String>);
 
 impl Identifier {
     pub fn new<R: AsRef<str>>(s: R) -> Self {
-        Identifier(Arc::new(s.as_ref().to_owned()))
+        // reuse existing atoms?
+        if let Some(w) = IDENT_INTERN_TBL.read().unwrap().get(s.as_ref()) {
+            if let Some(a) = w.upgrade() {
+                return Identifier(a);
+            }
+        }
+
+        let mut tbl = IDENT_INTERN_TBL.write().unwrap();
+        if let Some(a) = tbl.get(s.as_ref()).and_then(|x| x.upgrade()) {
+            Identifier(a)
+        } else {
+            let arc = Arc::new(s.as_ref().to_owned());
+            tbl.insert(s.as_ref().to_owned(), Arc::downgrade(&arc));
+            Identifier(arc)
+        }
     }
 
     pub fn from(s: String) -> Self {
-        Identifier(Arc::new(s))
+        // reuse existing atoms?
+        if let Some(w) = IDENT_INTERN_TBL.read().unwrap().get(&s) {
+            if let Some(a) = w.upgrade() {
+                return Identifier(a);
+            }
+        }
+
+        let mut tbl = IDENT_INTERN_TBL.write().unwrap();
+        if let Some(a) = tbl.get(&s).and_then(|x| x.upgrade()) {
+            Identifier(a)
+        } else {
+            let arc = Arc::new(s.clone());
+            tbl.insert(s, Arc::downgrade(&arc));
+            Identifier(arc)
+        }
     }
 }
 

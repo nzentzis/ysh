@@ -11,7 +11,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     -[ ] Arbitrary-precision arithmetic support in numeric tower
     -[ ] Guaranteed tail-call optimization
     -[X] Atoms
-    -[ ] Symbol/atom interning
+    -[X] Symbol/atom interning
     -[ ] Exceptions and handling
     -[ ] Use persistent data structures in place of native Vec
     -[X] Wrapper interface for global value-like objects (e.g. `path` and such)
