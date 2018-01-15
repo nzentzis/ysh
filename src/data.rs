@@ -42,7 +42,11 @@ impl Executable {
                 f(lexical, vals?.as_slice())
             },
             &Executable::CoreFn(ref f) => f(lexical, args),
-            &Executable::Interpreted(ref env, ref f) => f(env, args)
+            &Executable::Interpreted(ref env, ref f) => {
+                let vals: Result<Vec<_>, EvalError> =
+                    args.iter().map(|x| x.evaluate(lexical)).collect();
+                f(env, vals?.as_slice())
+            }
         }
     }
 }
