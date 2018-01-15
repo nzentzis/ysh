@@ -27,7 +27,8 @@ impl EditingDiscipline for Editor {
                 true
             },
             &Key::Up => {
-                if self.history_idx.unwrap_or(0) < (history::db().len()-1) {
+                let h_len = history::db().len();
+                if h_len > 0 && self.history_idx.unwrap_or(0) < (h_len-1) {
                     self.history_idx = Some(self.history_idx
                                                 .map(|x| x+1)
                                                 .unwrap_or(0));
