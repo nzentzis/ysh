@@ -265,6 +265,14 @@ fn main() {
 
     init_environment();
 
+    if cfg!(debug_assertions) {
+        for (k,v) in environment::global().listing() {
+            if v.doc.is_none() {
+                println!("warning: global item '{}' has no documentation", k);
+            }
+        }
+    }
+
     let mut term = match input::Terminal::new() {
         Ok(x)   => x,
         Err(_)  => unimplemented!()

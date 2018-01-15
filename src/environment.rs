@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use data::*;
 
@@ -96,6 +96,18 @@ lazy_static! {
 impl GlobalEnvironment {
     fn new() -> Self {
         GlobalEnvironment { mappings: RwLock::new(HashMap::new()) }
+    }
+
+    pub fn listing(&self) -> Vec<(String, Value)> {
+        let l = self.mappings.read().unwrap();
+        (&*l).into_iter()
+         .filter_map(|(k,v)|
+                     if let GlobalMappingValue::Literal(ref v) = v.value {
+                         Some((k.to_owned(), v.to_owned()))
+                     } else {
+                         None
+                     })
+         .collect::<Vec<_>>()
     }
 
     pub fn get<K: AsRef<str>>(&self, key: K) -> Option<Value> {
