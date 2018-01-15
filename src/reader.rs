@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use data::*;
 use numeric::*;
-use stream::{CharStream, ReadWrapper};
+use stream::{CharStream, ReadWrapper, StreamError};
 
 lazy_static! {
     // read table
@@ -29,6 +29,7 @@ enum ParseStackElement {
 pub enum ParseError {
     Evaluation(EvalError),
     Syntax(&'static str),
+    Stream(StreamError),
     UnexpectedEOF,
 }
 
@@ -38,6 +39,7 @@ impl ParseError {
             ParseError::Evaluation(e) => e,
             ParseError::UnexpectedEOF =>
                 EvalError::InvalidOperation("unexpected end of file"),
+            ParseError::Stream(s) => EvalError::from(s),
             ParseError::Syntax(_) => EvalError::InvalidOperation("syntax error")
         }
     }
@@ -49,6 +51,7 @@ impl ::std::fmt::Display for ParseError {
             &ParseError::Evaluation(ref e) => write!(f, "Evaluation error: {}", e),
             &ParseError::UnexpectedEOF => write!(f, "Unexpected end of file"),
             &ParseError::Syntax(ref e) => write!(f, "Syntax error: {}", e),
+            &ParseError::Stream(ref e) => write!(f, "Stream error: {}", e),
         }
     }
 }
@@ -59,6 +62,7 @@ impl ::std::error::Error for ParseError {
             &ParseError::Evaluation(_) => "evaluation error",
             &ParseError::UnexpectedEOF => "unexpected end of file",
             &ParseError::Syntax(_) => "syntax error",
+            &ParseError::Stream(_) => "stream operation failed",
         }
     }
 }
@@ -77,12 +81,16 @@ impl From<EvalError> for ParseError {
     fn from(e: EvalError) -> ParseError { ParseError::Evaluation(e) }
 }
 
+impl From<StreamError> for ParseError {
+    fn from(e: StreamError) -> ParseError { ParseError::Stream(e) }
+}
+
 pub type Parse<T> = Result<T, ParseError>;
 
 /// Read a numeric value from the given input stream
 /// 
 /// Upon read failure, push the chars back into the peek stream
-fn read_number<R: CharStream>(strm: &mut R) -> Parse<Number> {
+fn read_number<R: CharStream>(strm: &R) -> Parse<Number> {
     #[derive(Debug)]
     enum St {
         S,
@@ -115,9 +123,7 @@ fn read_number<R: CharStream>(strm: &mut R) -> Parse<Number> {
 
     let r = loop {
         let c = strm.peek().map(Some)
-                    .or_else(|e| {
-                        if e.kind() == io::ErrorKind::UnexpectedEof { Ok(None) }
-                        else { Err(e) }})?;
+                    .or_else(|e| if e.is_eof() { Ok(None) } else { Err(e) })?;
         match s {
             St::S => {
                 let c = if let Some(c) = c { c } else {break None};
@@ -327,7 +333,7 @@ fn valid_identifier_char(c: char) -> bool {
     c != '(' && c != ')' && c != '{' && c != '}' && !c.is_whitespace()
 }
 
-fn read_identifier<R: CharStream>(peek: &mut R) -> Parse<Identifier> {
+fn read_identifier<R: CharStream>(peek: &R) -> Parse<Identifier> {
     let c = peek.next()?;
 
     let mut s = String::with_capacity(32);
@@ -335,9 +341,7 @@ fn read_identifier<R: CharStream>(peek: &mut R) -> Parse<Identifier> {
     loop {
         let c = peek.peek()
                     .map(Some)
-                    .or_else(|e|
-                         if e.kind() == io::ErrorKind::UnexpectedEof {Ok(None)}
-                         else {Err(e)})?;
+                    .or_else(|e| if e.is_eof() {Ok(None)} else {Err(e)})?;
 
         // stop the ident if we hit EOF
         let c = if let Some(c) = c { c } else { break };
@@ -383,7 +387,7 @@ impl ReadOptions {
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-fn internal_read<R: CharStream>(peek: &mut R, conf: ReadOptions) -> Parse<(Value)> {
+fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
 
@@ -395,9 +399,7 @@ fn internal_read<R: CharStream>(peek: &mut R, conf: ReadOptions) -> Parse<(Value
         // read a character
         let c = loop {
             let c = peek.peek().map(Some)
-                   .or_else(|e| {
-                       if e.kind() == io::ErrorKind::UnexpectedEof { Ok(None) }
-                       else { Err(e) }})?;
+                   .or_else(|e| if e.is_eof() { Ok(None) } else { Err(e) })?;
             if !c.map(|x| x.is_whitespace() &&
                           !(x == '\n' && !conf.newlines))
                  .unwrap_or(false) { break c }
@@ -477,10 +479,7 @@ fn internal_read<R: CharStream>(peek: &mut R, conf: ReadOptions) -> Parse<(Value
             } else if c == '$' {
                 peek.next()?;
                 let c = peek.peek().map(Some)
-                            .or_else(|e|
-                                 if e.kind() == io::ErrorKind::UnexpectedEof {
-                                     Ok(None)
-                                 } else {Err(e)})?;
+                            .or_else(|e| if e.is_eof() {Ok(None)} else {Err(e)})?;
                 if let Some(c) = c {
                     if c == '(' {
                         if in_lambda {
@@ -678,7 +677,7 @@ fn internal_read<R: CharStream>(peek: &mut R, conf: ReadOptions) -> Parse<(Value
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-pub fn read<R: CharStream>(strm: &mut R) -> Parse<Value> {
+pub fn read<R: CharStream>(strm: &R) -> Parse<Value> {
     internal_read(strm, ReadOptions::default())
 }
 
@@ -921,6 +920,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
 mod test {
     use super::*;
     use std::io::Cursor;
+    use stream::ReadWrapper;
 
     #[test]
     fn numbers() {
@@ -958,7 +958,7 @@ mod test {
         ];
 
         for (i,o) in cases {
-            let r = read_number(&mut PeekReadChars::new(&mut Cursor::new(i)));
+            let r = read_number(&mut ReadWrapper::new(&mut Cursor::new(i)));
             assert_eq!(r.unwrap(), o);
         }
     }
@@ -972,7 +972,7 @@ mod test {
 
         for (i,o) in cases {
             let r = read_identifier(
-                &mut PeekReadChars::new(&mut Cursor::new(&i[..])));
+                &mut ReadWrapper::new(&mut Cursor::new(&i[..])));
             assert_eq!(r.unwrap(), Identifier::new(o));
         }
     }
@@ -1014,8 +1014,8 @@ mod test {
 
         for (i,o) in cases {
             let r = internal_read(
-                &mut PeekReadChars::new(&mut Cursor::new(&i[..])),
-                false);
+                &mut ReadWrapper::new(&mut Cursor::new(&i[..])),
+                ReadOptions::default());
             assert_eq!(r.unwrap(), o);
         }
     }
@@ -1023,7 +1023,8 @@ mod test {
     #[test]
     fn pipelines() {
         let s = &b"foo bar | baz bax |> foo |~> bax > bar < foo"[..];
-        let r = read_pipeline(&mut Cursor::new(&s[..])).unwrap();
+        let r = read_pipeline(&mut ReadWrapper::new(&mut Cursor::new(&s[..])))
+               .unwrap();
         assert_eq!(r, Pipeline {
             elements: vec![
                 PipelineComponent {

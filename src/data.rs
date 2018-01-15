@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use environment::Environment;
 use numeric::*;
-use stream::StreamWrapper;
+use stream::{StreamWrapper, StreamError};
 
 #[derive(Clone)]
 pub enum Executable {
@@ -93,6 +93,17 @@ impl ::std::error::Error for EvalError {
             &EvalError::TypeError(_) => &"type error",
             &EvalError::Runtime(_) => &"runtime error",
             &EvalError::Arity{..} => &"arity mismatch",
+        }
+    }
+}
+
+impl From<StreamError> for EvalError {
+    fn from(e: StreamError) -> EvalError {
+        match e {
+            StreamError::IO(e) => EvalError::IO(e),
+            StreamError::ModeDenied =>
+                EvalError::Runtime(String::from(
+                        "operation unsupported by stream"))
         }
     }
 }

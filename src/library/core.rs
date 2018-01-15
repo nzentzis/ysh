@@ -454,30 +454,21 @@ fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
     */
 }
 
-/// Repeatedly read forms from files and evaluate them. Return ().
+/// Repeatedly read forms from input streams and evaluate them. Return ().
 pub fn fn_source(env: &Environment, args: &[Value]) -> EvalResult {
     use std::fs;
     use ::reader::ParseError;
 
     for a in args.iter() {
-        // TODO: handle file conversions
-        let fname = a.into_str()?;
-        let f = fs::OpenOptions::new()
-                 .read(true)
-                 .open(fname);
-        match f {
-            Ok(mut f) => {
-                loop {
-                    let m = ::reader::read(&mut ReadWrapper::new(&mut f));
-                    match m {
-                        Ok(r) => {r.evaluate(env)?;},
-                        Err(e) => if let ParseError::UnexpectedEOF = e {break;}
-                                  else {return Err(EvalError::Runtime(
-                                              format!("read error: {}", e)));}
-                    }
-                }
-            },
-            Err(e) => return Err(EvalError::IO(e))
+        let f = a.into_raw_stream(true, false)?;
+        loop {
+            let m = ::reader::read(&f);
+            match m {
+                Ok(r) => {r.evaluate(env)?;},
+                Err(e) => if let ParseError::UnexpectedEOF = e {break;}
+                          else {return Err(EvalError::Runtime(
+                                      format!("read error: {}", e)));}
+            }
         }
     }
 
