@@ -26,7 +26,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     -[ ] Streams and I/O (`io/*`)
     --[ ] Colorized terminal output
     --[ ] Termcap interface
-    --[ ] Global stream abstraction
+    --[X] Global stream abstraction
     -[ ] Environment
     --[X] Environment variables
     ---[ ] Integrate with reader
