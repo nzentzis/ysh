@@ -51,6 +51,17 @@ impl Executable {
     }
 }
 
+/// Trait for types which can be converted to/from values
+pub trait ValueConvert : Sized {
+    /// Convert the object into a value representation
+    fn into_obj(&self) -> Value;
+
+    /// Try to convert a value back into the object
+    ///
+    /// The output of `into_obj` must be accepted by this function.
+    fn from_obj(val: &Value) -> Eval<Self>;
+}
+
 pub type ValueIteratorBox = Box<Iterator<Item=EvalResult>+Send+Sync>;
 pub type EvalResult = Result<Value, EvalError>;
 pub type Eval<T> = Result<T, EvalError>;

@@ -21,6 +21,7 @@ mod reader;
 #[allow(dead_code)] mod span;
 #[allow(dead_code)] mod editor;
 mod input;
+mod completion;
 
 // runtime control and management
 #[allow(dead_code)] mod jobs;
@@ -138,6 +139,7 @@ impl environment::BindingProxy for EnvProxy {
 
 fn init_environment() {
     library::initialize();
+    completion::initialize();
 
     let env = global();
     env.set("print", Value::from(Executable::native(|_, _| {
