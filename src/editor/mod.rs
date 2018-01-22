@@ -258,6 +258,28 @@ impl EditBuffer {
         res
     }
 
+    /// Replace all content with the given string, and maintain the cursor
+    /// position relative to the content buffer.
+    pub fn replace(&mut self, s: &str) {
+        let is_at_end = self.at_end();
+        let orig_len = self.buf.len();
+
+        self.buf.clear();
+        self.buf.extend(s.chars());
+
+        if orig_len == s.len() {
+            // no action needed
+        } else if orig_len > s.len() { // got smaller
+            if self.cursor > self.buf.len() {
+                self.cursor = self.buf.len();
+            }
+        } else { // original was smaller
+            if is_at_end {
+                self.cursor = self.buf.len();
+            }
+        }
+    }
+
     /// Clear all editing state and reset the buffer to empty
     /// 
     /// Highlight regions and text will be deleted, and the cursor will be reset

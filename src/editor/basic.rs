@@ -33,8 +33,7 @@ impl EditingDiscipline for Editor {
                                                 .map(|x| x+1)
                                                 .unwrap_or(0));
                     let s = history::db().get(self.history_idx.unwrap());
-                    buf.clear();
-                    buf.insert(s.into_repr());
+                    buf.replace(&s.into_repr());
                     true
                 } else {
                     false
@@ -49,8 +48,7 @@ impl EditingDiscipline for Editor {
                     } else {
                         self.history_idx = Some(i-1);
                         let s = history::db().get(self.history_idx.unwrap());
-                        buf.clear();
-                        buf.insert(s.into_repr());
+                        buf.replace(&s.into_repr());
                         true
                     }
                 } else {
