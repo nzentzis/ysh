@@ -77,6 +77,10 @@ impl<D: EditingDiscipline> LineEditor<D> {
     }
 }
 
+// TODO: add observer object for tracking changes to buffer
+//
+// something like an observe() method that takes a closure and returns an object 
+// with the same lifetime as the closure, so listeners don't have to be 'static
 /// Line editing structure for holding the current input buffer, cursor
 /// position, and highlighting regions
 /// 

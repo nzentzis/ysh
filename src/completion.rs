@@ -134,7 +134,6 @@ fn file_completer(seed: &str) -> Eval<Vec<Entry>> {
 
             if meta.is_file() && (meta.permissions().mode() & 0o111 != 0) {
                 if let Ok(s) = e.file_name().into_string() {
-                    println!("{}", s);
                     if s.starts_with(seed) {
                         res.push(Entry {
                             what: EntryType::SystemCommand,
@@ -253,13 +252,29 @@ pub struct CompletionSet {
 }
 
 impl CompletionSet {
+    /// Utility function for calling `complete` with every entry type allowed
+    pub fn complete_any(seed: &str) -> Self {
+        CompletionSet::complete(seed, HashSet::from_iter(
+                vec![EntryType::File,
+                     EntryType::FunctionBinding,
+                     EntryType::SystemCommand,
+                     EntryType::VariableBinding,
+                     EntryType::OtherForm]))
+    }
+
     /// Generate completions for the provided seed and goal set
     ///
     /// The `seed` parameter specifies the seed text to use when generating
     /// completions, and the `wanted` set lists the eligible entry types to
     /// return in the current context.
     pub fn complete(seed: &str, wanted: HashSet<EntryType>) -> Self {
-        unimplemented!()
+        let res = run_completer(seed, wanted.clone());
+        CompletionSet {
+            entries: res.into_iter().map(Arc::new).collect(),
+            seed: seed.to_owned(),
+            wanted,
+            marked: Weak::new()
+        }
     }
 
     /// Update the result set using more seed characters
@@ -273,8 +288,11 @@ impl CompletionSet {
             self.seed = seed.to_owned();
         } else {
             // update
+            let res = run_completer(seed, self.wanted.clone());
+            self.entries = res.into_iter().map(Arc::new).collect();
+            self.seed = seed.to_owned();
+            self.marked = Weak::new();
         }
-        unimplemented!()
     }
 
     /// Mark the item at a given index
@@ -303,6 +321,19 @@ impl CompletionSet {
     pub fn marked(&self) -> Option<Arc<Entry>> {
         self.marked.upgrade()
     }
+
+    /// Get the number of entries
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Access the list of entries
+    pub fn entries(&self) -> &[Arc<Entry>] {
+        self.entries.as_slice()
+    }
+
+    /// Convert into list of entries
+    pub fn into_entries(self) -> Vec<Arc<Entry>> {self.entries}
 }
 
 lazy_static! {
