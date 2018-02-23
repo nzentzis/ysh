@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use environment::*;
 use data::*;
-use stream::ReadWrapper;
 
 lazy_static! {
     static ref DOC_IF: Documentation = Documentation::new()
@@ -456,7 +455,6 @@ fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
 
 /// Repeatedly read forms from input streams and evaluate them. Return ().
 pub fn fn_source(env: &Environment, args: &[Value]) -> EvalResult {
-    use std::fs;
     use ::reader::ParseError;
 
     for a in args.iter() {
