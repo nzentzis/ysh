@@ -21,6 +21,7 @@ mod reader;
 #[allow(dead_code)] mod span;
 #[allow(dead_code)] mod editor;
 mod input;
+mod terminal;
 mod completion;
 
 // runtime control and management
@@ -207,7 +208,7 @@ fn init_environment() {
 
 fn init_process_group() -> Result<(), nix::Error> {
     // handle process group initialization
-    if termion::is_tty(&io::stdin()) {
+    if terminal::is_tty() {
         globals::enable_job_control();
 
         // move to the foreground

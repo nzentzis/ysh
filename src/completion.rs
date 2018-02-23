@@ -288,6 +288,7 @@ impl CompletionSet {
             self.seed = seed.to_owned();
         } else {
             // update
+            // TODO: retain marks if they're still valid
             let res = run_completer(seed, self.wanted.clone());
             self.entries = res.into_iter().map(Arc::new).collect();
             self.seed = seed.to_owned();

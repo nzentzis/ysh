@@ -13,6 +13,7 @@ use reader::read_pipeline;
 use editor::{LineEditor, EditingDiscipline};
 use editor::basic;
 use completion::{CompletionSet, Entry};
+use terminal;
 
 /// Key binding structure which can execute actions based on dynamic bindings
 pub struct Keymap {
@@ -53,16 +54,16 @@ impl BasicTerminal {
 
 struct ActiveEditor<'a> {
     /// Output handle - restores the terminal to its normal state when dropped
-    output: raw::RawTerminal<io::Stdout>,
+    output: raw::RawTerminal<terminal::StdoutGuard<'a>>,
 
     /// I/O streams
-    input: input::Events<io::Stdin>,
+    input: input::Events<terminal::StdinGuard<'a>>,
 
     /// Line editor
     editor: LineEditor<Box<EditingDiscipline>>,
 
     /// Parent terminal
-    parent: &'a mut FancyTerminal,
+    parent: &'a FancyTerminal,
     
     /// Active completion set, if any exists
     completions: Option<CompletionSet>,
@@ -71,11 +72,9 @@ struct ActiveEditor<'a> {
 // TODO: refactor completions out of ActiveEditor somehow
 impl<'a> ActiveEditor<'a> {
     fn new(term: &'a mut FancyTerminal) -> io::Result<Self> {
-        let raw = io::stdout().into_raw_mode()?;
-
         Ok(ActiveEditor {
-            output: raw,
-            input: io::stdin().events(),
+            output: term.guard.stdout().into_raw_mode()?,
+            input: term.guard.stdin().events(),
             editor: LineEditor::new(Box::new(basic::Editor::new())),
             parent: term,
             completions: None
@@ -89,7 +88,7 @@ impl<'a> ActiveEditor<'a> {
             match evt? {
                 event::Event::Key(event::Key::Char('\t')) => {
                     // TODO: make this not hard-coded
-                    self.trigger_completion();
+                    self.trigger_completion()?;
                 },
                 event::Event::Key(key) => self.handle_key(&key),
                 event::Event::Mouse(_) => {}, // TODO: handle mouse events
@@ -254,13 +253,19 @@ impl<'a> ActiveEditor<'a> {
 struct FancyTerminal {
     /// Active keyboard bindings and editing discipline
     keymap: Keymap,
+
+    /// Terminal guard
+    guard: terminal::TerminalGuard,
 }
 
 impl FancyTerminal {
     /// Generate a new terminal. Fail if the term isn't a PTY.
     fn new() -> io::Result<FancyTerminal> {
 
-        let term = FancyTerminal { keymap: Keymap::new(), };
+        let term = FancyTerminal {
+            keymap: Keymap::new(),
+            guard: terminal::acquire()
+        };
 
         Ok(term)
     }
@@ -298,9 +303,7 @@ impl Terminal {
     /// This function will fail with an error if it's connected to a PTY and
     /// cannot open it in raw mode.
     pub fn new() -> io::Result<Terminal> {
-        let output = io::stdout();
-
-        if !is_tty(&output) {
+        if !terminal::is_tty() {
             BasicTerminal::new()
                           .map(InternalTerminal::Basic)
                           .map(Terminal)

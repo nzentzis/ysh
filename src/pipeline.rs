@@ -184,6 +184,7 @@ enum FDWrapper {
     Pipe(RawFd)
 }
 
+// TODO: adapt this to use the terminal type
 impl FDWrapper {
     fn as_fd(&self) -> RawFd {
         match self {
