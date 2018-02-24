@@ -169,8 +169,7 @@ impl<'a> ActiveEditor<'a> {
     /// This will panic if no completion is active
     fn abort_completion(&mut self) -> io::Result<()> {
         if let Some(c) = self.completions.take() {
-            unimplemented!();
-
+            // just switch back to line mode
             self.render_line()
         } else {
             panic!("attempted to abort completion without active completion")
@@ -181,7 +180,11 @@ impl<'a> ActiveEditor<'a> {
     ///
     /// The given entry's content will be inserted into the line editor
     fn commit_completion(&mut self, entry: Arc<Entry>) -> io::Result<()> {
-        self.editor.buf_mut().insert(&entry.text);
+        // remove seed from stuff to insert so we don't replicate input
+        let to_insert = entry.text.trim_left_matches(
+            &self.editor.buf().as_string());
+
+        self.editor.buf_mut().insert(&to_insert);
         self.completions = None;
         self.render_line()
     }
