@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::io::prelude::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::io;
 
 use termion::*;
 use termion::raw::IntoRawMode;
 use termion::input::TermRead;
+
+mod render;
+mod keybind;
 
 use stream::ReadWrapper;
 use data::*;
@@ -15,29 +18,7 @@ use editor::basic;
 use completion::{CompletionSet, Entry};
 use terminal;
 
-mod render;
-
-/// Key binding structure which can execute actions based on dynamic bindings
-pub struct Keymap {
-    binds: HashMap<event::Key, Box<Fn()>>
-}
-
-impl Keymap {
-    /// Generate a new empty keymap
-    pub fn new() -> Self {
-        Keymap { binds: HashMap::new() }
-    }
-
-    /// Check for relevant bindings and return whether anything was run
-    pub fn invoke(&self, k: &event::Key) -> bool {
-        if let Some(f) = self.binds.get(&k) {
-            f();
-            true
-        } else {
-            false
-        }
-    }
-}
+use self::keybind::{Keymap, ScopedBinding};
 
 // TODO: implement basic terminal support
 /// Simple terminal which just reads a line
