@@ -15,6 +15,8 @@ use editor::basic;
 use completion::{CompletionSet, Entry};
 use terminal;
 
+mod render;
+
 /// Key binding structure which can execute actions based on dynamic bindings
 pub struct Keymap {
     binds: HashMap<event::Key, Box<Fn()>>
@@ -52,9 +54,12 @@ impl BasicTerminal {
     }
 }
 
+trait ReadRenderer {
+}
+
 struct ActiveEditor<'a> {
-    /// Output handle - restores the terminal to its normal state when dropped
-    output: raw::RawTerminal<terminal::StdoutGuard<'a>>,
+    /// Active renderer
+    render: Option<render::Renderer<terminal::StdoutGuard<'a>>>,
 
     /// I/O streams
     input: input::Events<terminal::StdinGuard<'a>>,
@@ -73,12 +78,21 @@ struct ActiveEditor<'a> {
 impl<'a> ActiveEditor<'a> {
     fn new(term: &'a mut FancyTerminal) -> io::Result<Self> {
         Ok(ActiveEditor {
-            output: term.guard.stdout().into_raw_mode()?,
+            render: Some(render::Renderer::new(term.guard
+                                              .stdout()
+                                              .into_raw_mode()?)),
             input: term.guard.stdin().events(),
             editor: LineEditor::new(Box::new(basic::Editor::new())),
             parent: term,
             completions: None
         })
+    }
+
+    /// Convert to a line renderer
+    fn render_line(&mut self) -> io::Result<()> {
+        let (r,e) = self.render.take().unwrap().to_line();
+        self.render = Some(r);
+        e
     }
 
     fn read(&mut self) -> io::Result<Pipeline> {
@@ -96,13 +110,18 @@ impl<'a> ActiveEditor<'a> {
             }
 
             if let Some(r) = self.editor.done() {
-                write!(self.output, "\r\n")?;
-                self.output.flush()?;
+                {
+                let mut output = self.render.as_mut().unwrap().output();
+                write!(output, "\r\n")?;
+                output.flush()?;
+                }
 
                 // if the line's blank, just reset
                 if r.as_bytes().iter().all(|x| *x == b' ') {
+                    self.render_line()?;
                     self.redraw()?;
                 } else {
+                    self.render_line()?;
                     let mut s = io::Cursor::new(r);
 
                     // need to add \r here since we're still in raw mode
@@ -112,7 +131,7 @@ impl<'a> ActiveEditor<'a> {
                             println!("ysh: {}\r", e);
                         },
                     }
-                    self.output.flush()?;
+                    self.render.as_mut().unwrap().output().flush()?;
                 }
 
                 self.editor = LineEditor::new(Box::new(basic::Editor::new()));
@@ -133,7 +152,9 @@ impl<'a> ActiveEditor<'a> {
     /// This will panic if no completion is active
     fn fail_completion(&mut self, msg: &str) -> io::Result<()> {
         if let Some(c) = self.completions.take() {
-            unimplemented!()
+            unimplemented!();
+
+            self.render_line()
         } else {
             panic!("attempted to fail completion without active completion")
         }
@@ -148,7 +169,9 @@ impl<'a> ActiveEditor<'a> {
     /// This will panic if no completion is active
     fn abort_completion(&mut self) -> io::Result<()> {
         if let Some(c) = self.completions.take() {
-            unimplemented!()
+            unimplemented!();
+
+            self.render_line()
         } else {
             panic!("attempted to abort completion without active completion")
         }
@@ -160,7 +183,7 @@ impl<'a> ActiveEditor<'a> {
     fn commit_completion(&mut self, entry: Arc<Entry>) -> io::Result<()> {
         self.editor.buf_mut().insert(&entry.text);
         self.completions = None;
-        Ok(())
+        self.render_line()
     }
 
     /// Start interactive completion
@@ -180,6 +203,13 @@ impl<'a> ActiveEditor<'a> {
             // just insert the entry
             self.commit_completion(res.into_entries().swap_remove(0))?;
         } else {
+            match self.render.take().unwrap().to_complete(&res) {
+                Ok(r) => self.render = Some(r),
+                Err((r,e)) => {
+                    self.render = Some(r);
+                    return Err(e);
+                }
+            }
             self.completions = Some(res);
         }
         self.redraw()
@@ -187,50 +217,12 @@ impl<'a> ActiveEditor<'a> {
 
     /// Redraw the command-line interface
     fn redraw(&mut self) -> io::Result<()> {
-        // TODO: prompt customization
-        
         if let Some(compl) = self.completions.as_ref() {
-            let s = self.editor.buf().as_string();
-            let mark = compl.marked_idx();
-            let marked_entry = compl.marked();
-
-            // TODO: insert greyed-out version of marked completion
-            // draw prompt
-            write!(self.output, "\r{}$ {}{}\r", clear::CurrentLine, s,
-                   clear::AfterCursor)?;
-
-            // draw completion list, capped to fixed size
-            let nlines = if let Some(mark) = mark {
-                // omit last line if mark is beyond range, so we have room to
-                // draw the marked entry
-                if mark > 10 { 9 }
-                else { 10 }
-            } else {
-                compl.len().min(10)
-            };
-            for comp in compl.entries().into_iter().take(nlines) {
-                if marked_entry.as_ref()
-                               .map(|e| Arc::ptr_eq(e, comp))
-                               .unwrap_or(false) {
-                    // marked - highlight it
-                    write!(self.output, "\n{}{}{}\r",
-                           style::Invert, comp.text, style::NoInvert)?;
-                } else {
-                    write!(self.output, "\n{}\r", comp.text)?;
-                }
+            if let Some(&mut render::Renderer::Complete(ref mut r)) = self.render.as_mut() {
+                r.update(compl);
             }
-
-            // move back to start
-            write!(self.output, "{}\r{}",
-                   cursor::Up(nlines as u16),
-                   cursor::Right(2+self.editor.buf().cursor() as u16))?;
-        } else {
-            let s = self.editor.buf().as_string();
-            write!(self.output, "\r{}$ {}\r{}",
-                   clear::CurrentLine, s,
-                   cursor::Right(2+self.editor.buf().cursor() as u16))?;
         }
-        self.output.flush()
+        self.render.as_mut().unwrap().render(&self.editor)
     }
 
     /// Handle a keyboard event for the entry prompt
