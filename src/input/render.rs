@@ -56,14 +56,12 @@ impl<W: Write> CompleteRenderer<W> {
                clear::AfterCursor)?;
 
         // draw completion list, capped to fixed size
-        let nlines = if let Some(mark) = mark {
+        let nlines = self.set.len().min(if let Some(mark) = mark {
             // omit last line if mark is beyond range, so we have room to
             // draw the marked entry
             if mark > 10 { 9 }
             else { 10 }
-        } else {
-            self.set.len().min(10)
-        };
+        } else { 10 });
         for comp in self.set.entries().into_iter().take(nlines) {
             if marked_entry.as_ref()
                            .map(|e| Arc::ptr_eq(e, comp))
