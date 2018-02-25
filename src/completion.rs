@@ -318,6 +318,29 @@ impl CompletionSet {
                                         .position(|e| Arc::ptr_eq(e, &ptr)))
     }
 
+    /// Select the next item in the list, or the first if none is selected
+    pub fn mark_next(&mut self) {
+        if let Some(i) = self.marked_idx() {
+            if i < self.entries.len()-1 {
+                self.mark_at(i+1);
+            }
+        } else {
+            self.mark_at(0);
+        }
+    }
+
+    /// Select the previous item in the list, or the last if none is selected
+    pub fn mark_prev(&mut self) {
+        if let Some(i) = self.marked_idx() {
+            if i > 0 {
+                self.mark_at(i-1);
+            }
+        } else {
+            let l = self.entries.len()-1;
+            self.mark_at(l);
+        }
+    }
+
     /// Get the marked item if possible
     pub fn marked(&self) -> Option<Arc<Entry>> {
         self.marked.upgrade()

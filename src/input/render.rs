@@ -15,7 +15,12 @@ pub struct LineRenderer<W: Write> {
 }
 
 impl<W: Write> LineRenderer<W> {
-    pub fn render<E: EditingDiscipline>(&mut self, editor: &LineEditor<E>) -> io::Result<()> {
+    pub fn new(output: raw::RawTerminal<W>) -> Self {
+        LineRenderer { output }
+    }
+
+    pub fn render<E: EditingDiscipline>(&mut self, editor: &LineEditor<E>)
+            -> io::Result<()> {
         let buf = editor.buf();
         let s = buf.as_string();
         write!(self.output, "\r{}$ {}\r{}",
@@ -25,6 +30,9 @@ impl<W: Write> LineRenderer<W> {
     }
 
     pub fn into_output(self) -> raw::RawTerminal<W> { self.output }
+
+    /// Get the output stream temporarily
+    pub fn output(&mut self) -> &mut raw::RawTerminal<W> {&mut self.output}
 }
 
 /// Completion renderer
@@ -36,7 +44,7 @@ pub struct CompleteRenderer<W: Write> {
 }
 
 impl<W: Write> CompleteRenderer<W> {
-    fn new(output: raw::RawTerminal<W>, set: &CompletionSet) -> Self {
+    pub fn new(output: raw::RawTerminal<W>, set: &CompletionSet) -> Self {
         CompleteRenderer {
             output,
             set: set.to_owned()
@@ -50,9 +58,15 @@ impl<W: Write> CompleteRenderer<W> {
         let mark = self.set.marked_idx();
         let marked_entry = self.set.marked();
 
-        // TODO: insert greyed-out version of marked completion
+        // figure out what to render after the input string
+        let after_input = match self.set.marked() {
+            None => String::from(""),
+            Some(e) => e.text.trim_left_matches(&s).to_owned()
+        };
+
         // draw prompt
-        write!(self.output, "\r{}$ {}{}\r", clear::CurrentLine, s,
+        write!(self.output, "\r{}$ {}{}{}{}{}\r", clear::CurrentLine, s,
+               style::Italic, after_input, style::NoItalic,
                clear::AfterCursor)?;
 
         // draw completion list, capped to fixed size
@@ -93,6 +107,9 @@ impl<W: Write> CompleteRenderer<W> {
     pub fn update(&mut self, set: &CompletionSet) {
         self.set = set.to_owned();
     }
+
+    /// Get the output stream temporarily
+    pub fn output(&mut self) -> &mut raw::RawTerminal<W> {&mut self.output}
 }
 
 /// History search renderer

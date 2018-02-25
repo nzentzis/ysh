@@ -8,6 +8,12 @@ enum Binding {
     Scoped(BindingInfo)
 }
 
+impl ::std::fmt::Debug for Binding {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        Ok(())
+    }
+}
+
 /// Key binding structure which can execute actions based on dynamic bindings
 pub struct Keymap {
     binds: Mutex<HashMap<event::Key, Binding>>,
@@ -50,8 +56,8 @@ impl Keymap {
 
     /// Register a new scoped binding
     pub fn bind<'a, F>(&'a self, key: event::Key, f: F) -> ScopedBinding
-            where F: Fn() + Send + 'static {
-        let f: Arc<Box<Fn() + Send + 'static>> = Arc::new(Box::new(f));
+            where F: Fn() + Send + Sync + 'static {
+        let f: Arc<Box<Fn() + Send + Sync + 'static>> = Arc::new(Box::new(f));
 
         let mut w = self.binds.lock().unwrap();
         w.insert(key, Binding::Scoped(BindingInfo(Arc::downgrade(&f))));
@@ -62,8 +68,9 @@ impl Keymap {
     }
 }
 
-struct BindingInfo(Weak<Box<Fn() + Send + 'static>>);
+struct BindingInfo(Weak<Box<Fn() + Send + Sync + 'static>>);
 
+// TODO: Figure out a way for closures to not need to be 'static
 /// Handle for a scoped binding, which auto-deletes when its binding object is
 /// dropped.
 ///
@@ -75,5 +82,5 @@ struct BindingInfo(Weak<Box<Fn() + Send + 'static>>);
 /// even in this circumstance, the binding will not be dropped until the
 /// `ScopedBinding` is.
 pub struct ScopedBinding {
-    func: Arc<Box<Fn() + Send + 'static>>,
+    func: Arc<Box<Fn() + Send + Sync + 'static>>,
 }

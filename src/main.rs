@@ -3,6 +3,7 @@ extern crate regex;
 extern crate termion;
 extern crate libc;
 extern crate nix;
+extern crate parking_lot;
 
 // base modules
 #[macro_use] mod util;
