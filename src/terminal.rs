@@ -4,6 +4,7 @@
 use std::sync::{Condvar, Mutex, Arc};
 use std::io::prelude::*;
 use std::marker::PhantomData;
+use std::os::unix::prelude::*;
 use std::io;
 
 use termion;
@@ -78,6 +79,28 @@ impl TerminalGuard {
             life: PhantomData
         }
     }
+
+    /// Convert this guard into owned (stdin, stdout, stderr) channels
+    ///
+    /// This is less efficient than the lifetime-bounded versions, but allows
+    /// transferring ownership of the resulting guards outside the lifetime of
+    /// the `TerminalGuard`.
+    pub fn into_owned_channels(self) -> (OwnedStdinGuard, OwnedStdoutGuard, OwnedStderrGuard) {
+        let a = Arc::new(self);
+        
+        (OwnedStdinGuard {
+            chan: io::stdin(),
+            guard: Arc::clone(&a)
+        },
+        OwnedStdoutGuard {
+            chan: io::stdout(),
+            guard: Arc::clone(&a)
+        },
+        OwnedStderrGuard {
+            chan: io::stderr(),
+            guard: a
+        })
+    }
 }
 
 impl Drop for TerminalGuard {
@@ -127,4 +150,83 @@ impl<'a> Read for StdinGuard<'a> {
     fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
         self.chan.read(data)
     }
+}
+
+/// Owned version of `StdoutGuard` that carries the lock around with it
+pub struct OwnedStdoutGuard {
+    chan: io::Stdout,
+    guard: Arc<TerminalGuard>,
+}
+
+impl Write for OwnedStdoutGuard {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.chan.write(data)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.chan.flush()
+    }
+}
+
+impl OwnedStdoutGuard {
+    pub fn as_raw(self) -> FdGuard<Self> {
+        let fd = self.chan.as_raw_fd();
+        FdGuard{guard: self, fd}
+    }
+}
+
+/// Owned version of `StdinGuard` that carries the lock around with it
+pub struct OwnedStdinGuard {
+    chan: io::Stdin,
+    guard: Arc<TerminalGuard>,
+}
+
+impl Read for OwnedStdinGuard {
+    fn read(&mut self, data: &mut [u8]) -> io::Result<usize> {
+        self.chan.read(data)
+    }
+}
+
+impl OwnedStdinGuard {
+    pub fn as_raw(self) -> FdGuard<Self> {
+        let fd = self.chan.as_raw_fd();
+        FdGuard{guard: self, fd}
+    }
+}
+
+/// Owned version of `StderrGuard` that carries the lock around with it
+pub struct OwnedStderrGuard {
+    chan: io::Stderr,
+    guard: Arc<TerminalGuard>,
+}
+
+impl Write for OwnedStderrGuard {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.chan.write(data)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.chan.flush()
+    }
+}
+
+impl OwnedStderrGuard {
+    pub fn as_raw(self) -> FdGuard<Self> {
+        let fd = self.chan.as_raw_fd();
+        FdGuard{guard: self, fd}
+    }
+}
+
+/// Result of converting an otherwise owned guard into a `RawFd`
+///
+/// This does not permit writing or reading, but must be maintained for as long
+/// as the produced FD is used. Multiple concurrent accessors to an FD will have
+/// weird effects.
+pub struct FdGuard<T> {
+    guard: T,
+    fd: RawFd
+}
+
+impl<T> FdGuard<T> {
+    pub fn fd(&self) -> RawFd { self.fd }
 }
