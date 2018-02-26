@@ -5,7 +5,7 @@ use std::io::prelude::*;
 use termion::*;
 
 use editor::{LineEditor, EditingDiscipline};
-use completion::CompletionSet;
+use completion::{EntryType, CompletionSet};
 
 /// Line input renderer
 ///
@@ -76,16 +76,45 @@ impl<W: Write> CompleteRenderer<W> {
             if mark > 10 { 9 }
             else { 10 }
         } else { 10 });
+
+        // figure out where to put the separator for docstrings
+        let max_len = self.set.entries().into_iter().take(nlines)
+                          .map(|x| x.text.len())
+                          .max()
+                          .unwrap_or(1);
+        let sep_column = max_len + 2;
+
         for comp in self.set.entries().into_iter().take(nlines) {
+            let spaces = sep_column - comp.text.len();
+            // set color based on type
+            // TODO: make these configurable
+            match comp.what {
+                EntryType::SystemCommand =>
+                    write!(self.output, "{}", color::Fg(color::Green))?,
+                EntryType::FunctionBinding =>
+                    write!(self.output, "{}", color::Fg(color::Cyan))?,
+                EntryType::VariableBinding =>
+                    write!(self.output, "{}", color::Fg(color::Yellow))?,
+                EntryType::OtherForm =>
+                    write!(self.output, "{}", color::Fg(color::Red))?,
+                EntryType::File => {},
+            }
+
             if marked_entry.as_ref()
                            .map(|e| Arc::ptr_eq(e, comp))
                            .unwrap_or(false) {
                 // marked - highlight it
-                write!(self.output, "\n{}{}{}\r",
+                write!(self.output, "\n{}{}{}",
                        style::Invert, comp.text, style::NoInvert)?;
             } else {
-                write!(self.output, "\n{}\r", comp.text)?;
+                write!(self.output, "\n{}", comp.text)?;
             }
+
+            // write docs if available
+            if let Some(ref doc) = comp.docs {
+                write!(self.output, "{}- {}", " ".repeat(spaces), doc)?;
+            }
+            write!(self.output, "{}\r", color::Fg(color::Reset));
         }
 
         // move back to start
