@@ -70,21 +70,36 @@ impl<W: Write> CompleteRenderer<W> {
                clear::AfterCursor)?;
 
         // draw completion list, capped to fixed size
-        let nlines = self.set.len().min(if let Some(mark) = mark {
-            // omit last line if mark is beyond range, so we have room to
-            // draw the marked entry
-            if mark > 10 { 9 }
-            else { 10 }
-        } else { 10 });
+        // TODO: make size configurable
+        let nlines = self.set.len().min(10);
+
+        // Figure out whether to seek completion list. The list should seek when
+        // all these requirements are fulfilled:
+        //
+        //  * There are more completions than the number of available lines
+        //  * The cursor is at (or past) the (N/2)th completion where N=set.len()
+        //  * The proposed seek position is below set.len()-nlines
+        //
+        // In other words, try to fill the screen and keep the cursor centered
+        // vertically.
+        let seek_begin = if let Some(idx) = self.set.marked_idx() {
+            if self.set.len() > nlines {
+                if idx >= (nlines/2) {
+                    let candidate_pos = idx - (nlines/2);
+                    candidate_pos.min(self.set.len()-nlines)
+                } else {0}
+            } else {0}
+        } else {0};
 
         // figure out where to put the separator for docstrings
-        let max_len = self.set.entries().into_iter().take(nlines)
-                          .map(|x| x.text.len())
-                          .max()
-                          .unwrap_or(1);
+        let to_show = self.set.entries().into_iter()
+                     .skip(seek_begin).take(nlines)
+                     .collect::<Vec<_>>();
+        let max_len = to_show.iter().map(|x| x.text.len()).max()
+                             .unwrap_or(1);
         let sep_column = max_len + 2;
 
-        for comp in self.set.entries().into_iter().take(nlines) {
+        for comp in to_show {
             let spaces = sep_column - comp.text.len();
             // set color based on type
             // TODO: make these configurable
