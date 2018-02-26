@@ -72,14 +72,15 @@ struct ActiveEditor<'a> {
 
 // TODO: this is really nasty - clean it up
 impl<'a> ActiveEditor<'a> {
-    fn new(term: &'a mut FancyTerminal) -> io::Result<Self> {
+    fn new(term: &'a mut FancyTerminal, guard: &'a mut terminal::TerminalGuard)
+            -> io::Result<Self> {
         Ok(ActiveEditor {
             mode: Some(EditorState::Editing {
-                render: render::LineRenderer::new(term.guard
+                render: render::LineRenderer::new(guard
                                                  .stdout()
                                                  .into_raw_mode()?)
             }),
-            input: term.guard.stdin().events(),
+            input: guard.stdin().events(),
             editor: LineEditor::new(Box::new(basic::Editor::new())),
             parent: term,
         })
@@ -339,9 +340,6 @@ impl<'a> ActiveEditor<'a> {
 struct FancyTerminal {
     /// Active keyboard bindings and editing discipline
     keymap: Keymap,
-
-    /// Terminal guard
-    guard: terminal::TerminalGuard,
 }
 
 impl FancyTerminal {
@@ -350,7 +348,6 @@ impl FancyTerminal {
 
         let term = FancyTerminal {
             keymap: Keymap::new(),
-            guard: terminal::acquire()
         };
 
         Ok(term)
@@ -358,7 +355,11 @@ impl FancyTerminal {
 
     /// Read a pipeline from the input terminal
     fn read(&mut self) -> io::Result<Pipeline> {
-        ActiveEditor::new(self)?.read()
+        let mut guard = terminal::acquire();
+        let r = {
+            ActiveEditor::new(self, &mut guard)?.read()
+        };
+        r
     }
 }
 

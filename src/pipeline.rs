@@ -688,6 +688,7 @@ impl TransformEvaluation {
                  output: EvalOutput) -> Option<()>
             where I: IntoIterator<Item=PlanElement> {
         use std::io::prelude::*;
+        use terminal;
 
         let mut elements = elements.into_iter();
         let first = elements.next().unwrap();
@@ -724,10 +725,11 @@ impl TransformEvaluation {
         job.spawn(move || {
             // TODO: error handling
             let res = expr.evaluate(&::environment::empty());
+            let mut term = terminal::acquire();
             let res = match res {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("ysh: {:?} - {}", expr, e);
+                    writeln!(term.stderr(), "ysh: {:?} - {}", expr, e).unwrap();
                     return;
                 }
             };
@@ -737,10 +739,12 @@ impl TransformEvaluation {
                     if res != Value::empty() {
                         match res.into_str() {
                             Ok(s) => {
-                                println!("{}", s);
+                                writeln!(term.stdout(), "{}", s).unwrap();
                             },
                             Err(e) => {
-                                println!("ysh: cannot convert to string: {}", e);
+                                writeln!(term.stderr(),
+                                    "ysh: cannot convert to string: {}", e)
+                                    .unwrap();
                             }
                         }
                     }
@@ -751,8 +755,11 @@ impl TransformEvaluation {
                     };
                     match res.into_str() {
                         Ok(r) => {write!(f, "{}", r).unwrap();},
-                        Err(e) =>
-                            eprintln!("ysh: cannot convert to string: {}", e),
+                        Err(e) => {
+                            writeln!(term.stderr(),
+                                "ysh: cannot convert to string: {}", e)
+                                .unwrap();
+                        }
                     }
                 }
             }
