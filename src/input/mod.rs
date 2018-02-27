@@ -288,6 +288,12 @@ impl<'a> ActiveEditor<'a> {
                         });
                     }
                 },
+                event::Key::Char(' ') => {
+                    if let Some(m) = set.marked() {
+                        // don't consume char so the space is added
+                        action = Some(Action::ComplCommit(m));
+                    }
+                },
                 event::Key::Char('\n') => {
                     if let Some(m) = set.marked() {
                         // don't consume char so it can be immediately run
