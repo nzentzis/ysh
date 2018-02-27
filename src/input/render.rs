@@ -65,9 +65,8 @@ impl<W: Write> CompleteRenderer<W> {
         };
 
         // draw prompt
-        write!(self.output, "\r{}$ {}{}{}{}{}\r", clear::CurrentLine, s,
-               style::Italic, after_input, style::NoItalic,
-               clear::AfterCursor)?;
+        write!(self.output, "\r{}$ {}{}{}{}\r", clear::CurrentLine, s,
+               style::Italic, after_input, style::NoItalic)?;
 
         // draw completion list, capped to fixed size
         // TODO: make size configurable
@@ -133,7 +132,8 @@ impl<W: Write> CompleteRenderer<W> {
         }
 
         // move back to start
-        write!(self.output, "{}\r{}",
+        write!(self.output, "{}{}\r{}",
+               clear::AfterCursor,
                cursor::Up(nlines as u16),
                cursor::Right(2+buf.cursor() as u16))?;
         self.output.flush()
