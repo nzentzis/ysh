@@ -31,7 +31,6 @@ mod evaluate;
 #[allow(dead_code)] mod pipeline;
 mod history;
 
-use std::io;
 use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
 
@@ -41,7 +40,6 @@ use nix::sys::signal;
 use environment::{Environment, global};
 use pipeline::{Plan, PlanningError};
 use data::{Value, ValueLike, Executable, EvalResult, Eval};
-use reader::ParseError;
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 

@@ -1,16 +1,13 @@
 mod render;
 mod keybind;
 
-use std::collections::HashMap;
 use std::io::prelude::*;
-use std::sync::{Arc, Weak, Mutex};
+use std::sync::Arc;
 use std::io;
 
 use termion::*;
 use termion::raw::IntoRawMode;
 use termion::input::TermRead;
-
-use parking_lot::ReentrantMutex;
 
 use stream::ReadWrapper;
 use data::*;
@@ -20,7 +17,7 @@ use editor::basic;
 use completion::{CompletionSet, Entry};
 use terminal;
 
-use self::keybind::{Keymap, ScopedBinding};
+use self::keybind::Keymap;
 
 // TODO: implement basic terminal support
 /// Simple terminal which just reads a line

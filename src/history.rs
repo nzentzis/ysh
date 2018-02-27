@@ -2,7 +2,7 @@ use std::sync::{Mutex, Arc, Weak};
 use std::time::SystemTime;
 
 use data::*;
-use environment::{global, BindingProxy};
+use environment::BindingProxy;
 
 pub struct HistoryProxy {
 }

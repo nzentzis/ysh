@@ -1,6 +1,5 @@
 use std::str;
 use std::str::FromStr;
-use std::io::prelude::*;
 use std::io;
 use std::sync::RwLock;
 use std::collections::HashMap;
