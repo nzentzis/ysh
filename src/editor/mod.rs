@@ -251,7 +251,7 @@ impl EditBuffer {
     /// chars after the cursor will be deleted.
     pub fn delete_forward(&mut self, num: usize) -> String {
         // cap the number of characters to delete
-        let num = num.min((self.buf.len()+1) - self.cursor);
+        let num = num.min(self.buf.len() - self.cursor);
 
         // avoid useless deletions at end of string
         if num == 0 { return String::new(); }
@@ -388,6 +388,20 @@ mod tests {
 
         b.insert("c");
         assert_eq!(&b.as_string(), "bac");
+        assert_eq!(b.cursor(), 3);
+    }
+
+    #[test]
+    fn test_deletes() {
+        let mut b = EditBuffer::new();
+        b.insert("text");
+        assert_eq!(&b.as_string(), "text");
+        assert_eq!(b.cursor(), 4);
+        b.delete(1);
+        assert_eq!(&b.as_string(), "tex");
+        assert_eq!(b.cursor(), 3);
+        b.delete_forward(1);
+        assert_eq!(&b.as_string(), "tex");
         assert_eq!(b.cursor(), 3);
     }
 }
