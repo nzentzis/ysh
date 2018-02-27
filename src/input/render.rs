@@ -129,7 +129,7 @@ impl<W: Write> CompleteRenderer<W> {
             if let Some(ref doc) = comp.docs {
                 write!(self.output, "{}- {}", " ".repeat(spaces), doc)?;
             }
-            write!(self.output, "{}\r", color::Fg(color::Reset));
+            write!(self.output, "{}\r", color::Fg(color::Reset))?;
         }
 
         // move back to start

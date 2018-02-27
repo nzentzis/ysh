@@ -130,7 +130,7 @@ impl<'a> ActiveEditor<'a> {
 
         while let Some(evt) = self.input.next() {
             match evt? {
-                event::Event::Key(key) => self.handle_key(&key),
+                event::Event::Key(key) => self.handle_key(&key)?,
                 event::Event::Mouse(_) => {}, // TODO: handle mouse events
                 event::Event::Unsupported(_) => {}, // TODO: handle more events
             }
@@ -248,7 +248,7 @@ impl<'a> ActiveEditor<'a> {
     }
 
     /// Try to handle internal key bindings
-    fn handle_internal_key(&mut self, key: &event::Key) -> bool {
+    fn handle_internal_key(&mut self, key: &event::Key) -> io::Result<bool> {
         enum Action {
             ComplAbort,
             ComplCommit(Arc<Entry>), // (entry, consume_key)
@@ -261,15 +261,15 @@ impl<'a> ActiveEditor<'a> {
             match *key {
                 event::Key::Char('\t') => {
                     set.mark_next();
-                    return true;
+                    return Ok(true);
                 },
                 event::Key::Up => {
                     set.mark_prev();
-                    return true;
+                    return Ok(true);
                 },
                 event::Key::Down => {
                     set.mark_next();
-                    return true;
+                    return Ok(true);
                 },
                 event::Key::Esc => {
                     // abort
@@ -300,28 +300,28 @@ impl<'a> ActiveEditor<'a> {
         
         match action {
             Some(Action::ComplAbort) => {
-                self.abort_completion();
+                self.abort_completion()?;
             },
             Some(Action::ComplCommit(c)) => {
-                self.commit_completion(c);
+                self.commit_completion(c)?;
                 self.redraw();
             },
             _ => {}
         }
-        consume
+        Ok(consume)
     }
 
     /// Handle a keyboard event for the entry prompt
-    fn handle_key(&mut self, key: &event::Key) {
+    fn handle_key(&mut self, key: &event::Key) -> io::Result<()> {
         // don't process a key if it's bound
-        if self.handle_internal_key(key) || self.parent.keymap.invoke(key) {
-            return;
+        if self.handle_internal_key(key)? || self.parent.keymap.invoke(key) {
+            return Ok(());
         }
 
         // TODO: move this so it's not hard-coded
         if *key == event::Key::Char('\t') {
             self.trigger_completion().unwrap();
-            return;
+            return Ok(());
         }
 
         // pass it to the line editor
@@ -330,6 +330,7 @@ impl<'a> ActiveEditor<'a> {
         if let Some(EditorState::Completion {ref mut set, ..}) = self.mode {
             set.update(&self.editor.buf().as_string());
         }
+        Ok(())
     }
 }
 
