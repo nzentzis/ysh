@@ -151,7 +151,7 @@ impl<'a> ActiveEditor<'a> {
                     let mut s = io::Cursor::new(r);
 
                     // need to add \r here since we're still in raw mode
-                    match read_pipeline(&mut ReadWrapper::new(&mut s)) {
+                    match read_pipeline(&mut ReadWrapper::new(&mut s)).result {
                         Ok(r) => return Ok(r),
                         Err(e) => {
                             println!("ysh: {}\r", e);

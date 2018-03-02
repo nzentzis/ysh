@@ -481,7 +481,7 @@ impl ValueLike for PolyField {
         let data = self.data.copy(..);
         let n = parse_number(data.as_slice());
 
-        if let Ok(n) = n {
+        if let Ok(n) = n.result {
             Ok(Some(n))
         } else {
             Ok(None)

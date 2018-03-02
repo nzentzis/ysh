@@ -461,7 +461,7 @@ pub fn fn_source(env: &Environment, args: &[Value]) -> EvalResult {
         let f = a.into_raw_stream(true, false)?;
         loop {
             let m = ::reader::read(&f);
-            match m {
+            match m.result {
                 Ok(r) => {r.evaluate(env)?;},
                 Err(e) => if let ParseError::UnexpectedEOF = e {break;}
                           else {return Err(EvalError::Runtime(

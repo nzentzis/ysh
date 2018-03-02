@@ -86,6 +86,85 @@ impl From<StreamError> for ParseError {
 
 pub type Parse<T> = Result<T, ParseError>;
 
+pub enum ParseContext {
+    /// String contents, starting with the given partial contents
+    StringContent(String),
+
+    /// Symbol, starting with the given partial contents
+    Symbol(String),
+
+    /// Some other value-like element (number, boolean, etc)
+    Value,
+
+    /// Stringifiable object representing a file
+    File,
+
+    /// Other element
+    Other
+}
+
+pub struct ParseOutput<T> {
+    pub result: Parse<T>,
+    pub context: ParseContext
+}
+
+impl<T> ParseOutput<T> {
+    fn err(ctx: ParseContext, e: ParseError) -> Self {
+        ParseOutput {
+            result: Err(e),
+            context: ctx
+        }
+    }
+
+    fn generic_err(e: ParseError) -> Self {
+        ParseOutput {
+            result: Err(e),
+            context: ParseContext::Other
+        }
+    }
+
+    fn ok(ctx: ParseContext, res: T) -> Self {
+        ParseOutput {
+            result: Ok(res),
+            context: ctx
+        }
+    }
+
+    /// Map the error of one `ParseOutput` into another value type
+    ///
+    /// # Panics
+    ///
+    /// This will panic if called on a non-error object
+    fn map_err<O>(self) -> ParseOutput<O> {
+        let e = if let Err(e) = self.result {e}
+                else {panic!("tried to map_err non-error result object")};
+
+        ParseOutput {
+            result: Err(e),
+            context: self.context
+        }
+    }
+
+    /// Map the success value through a function
+    fn map<R, F: Fn(T) -> R>(self, f: F) -> ParseOutput<R> {
+        ParseOutput {
+            result: self.result.map(f),
+            context: self.context
+        }
+    }
+
+    fn or_else<F>(self, f: F) -> ParseOutput<T> where
+            F: Fn(ParseContext, ParseError) -> ParseOutput<T> {
+        match self.result {
+            Ok(r) => ParseOutput {
+                result: Ok(r),
+                context: self.context
+            },
+            Err(e) => f(self.context, e)
+        }
+    }
+}
+
 /// Read a numeric value from the given input stream
 /// 
 /// Upon read failure, push the chars back into the peek stream
@@ -322,37 +401,55 @@ fn read_number<R: CharStream>(strm: &R) -> Parse<Number> {
     }
 }
 
-pub fn parse_number(x: &[u8]) -> Parse<Number> {
+pub fn parse_number(x: &[u8]) -> ParseOutput<Number> {
     use std::io::Cursor;
 
-    read_number(&mut ReadWrapper::new(&mut Cursor::new(x)))
+    match read_number(&mut ReadWrapper::new(&mut Cursor::new(x))) {
+        Ok(r)  => ParseOutput::ok(ParseContext::Other, r),
+        Err(e) => ParseOutput::err(ParseContext::Other, e),
+    }
 }
 
 fn valid_identifier_char(c: char) -> bool {
     c != '(' && c != ')' && c != '{' && c != '}' && !c.is_whitespace()
 }
 
-fn read_identifier<R: CharStream>(peek: &R) -> Parse<Identifier> {
-    let c = peek.next()?;
+fn read_identifier<R: CharStream>(peek: &R) -> ParseOutput<Identifier> {
+    let c = match peek.next() {
+        Ok(r) => r,
+        Err(e) => return ParseOutput::err(
+            ParseContext::Symbol(String::from("")),
+            ParseError::from(e))
+    };
 
     let mut s = String::with_capacity(32);
     s.push(c);
     loop {
         let c = peek.peek()
                     .map(Some)
-                    .or_else(|e| if e.is_eof() {Ok(None)} else {Err(e)})?;
+                    .or_else(|e| if e.is_eof() {Ok(None)} else {Err(e)});
+        let c = match c {
+            Ok(r) => r,
+            Err(e) => return ParseOutput::err(ParseContext::Symbol(s),
+                                              ParseError::from(e))
+        };
 
         // stop the ident if we hit EOF
         let c = if let Some(c) = c { c } else { break };
 
         if valid_identifier_char(c) {
             s.push(c);
-            peek.next()?;
+            match peek.next() {
+                Ok(_) => {},
+                Err(e) => return ParseOutput::err(ParseContext::Symbol(s),
+                                                  ParseError::from(e))
+            }
         } else {
             break;
         }
     }
-    Ok(Identifier::from(s))
+    ParseOutput::ok(ParseContext::Symbol(s.clone()),
+                    Identifier::from(s))
 }
 
 /// Reader configuration structure
@@ -386,7 +483,7 @@ impl ReadOptions {
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
+fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> ParseOutput<Value> {
     let mut stack = Vec::with_capacity(16);
     let table = READ_TABLE.read().unwrap();
 
@@ -398,24 +495,35 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
         // read a character
         let c = loop {
             let c = peek.peek().map(Some)
-                   .or_else(|e| if e.is_eof() { Ok(None) } else { Err(e) })?;
+                   .or_else(|e| if e.is_eof() { Ok(None) } else { Err(e) });
+            let c = match c {
+                Ok(r) => r,
+                Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                  ParseError::Stream(e))
+            };
             if !c.map(|x| x.is_whitespace() &&
                           !(x == '\n' && !conf.newlines))
                  .unwrap_or(false) { break c }
 
             // skip whitespace
-            peek.next()?;
+            match peek.next() {
+                Ok(_) => {},
+                Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                  ParseError::Stream(e))
+            }
         };
 
         let c = if let Some(c) = c { c } else {
             // handle EOF
-            break Err(ParseError::UnexpectedEOF);
+            break ParseOutput::err(ParseContext::Other,
+                                   ParseError::UnexpectedEOF);
         };
 
         // if we got here, we're not allowing newlines - treat this just like
         // EOF
         if c == '\n' {
-            break Err(ParseError::UnexpectedEOF);
+            break ParseOutput::err(ParseContext::Other,
+                                   ParseError::UnexpectedEOF);
         }
 
         // use a reader macro if applicable
@@ -425,32 +533,60 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
         } else {
             if c == '(' {
                 stack.push(ParseStackElement::List(Vec::new()));
-                peek.next()?;
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
                 continue;
             } else if c == ')' {
                 let v =
                     if let Some(ParseStackElement::List(v)) = stack.pop() {v}
-                    else { return Err(ParseError::Syntax("unexpected ')'")) };
-                peek.next()?;
+                    else { return ParseOutput::err(
+                            ParseContext::Other,
+                            ParseError::Syntax("unexpected ')'")) };
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
                 Value::list(v)
             } else if c == '{' {
                 stack.push(ParseStackElement::Map(HashMap::new(), None));
-                peek.next()?;
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
                 continue;
             } else if c == '}' {
                 let h =
                     if let Some(ParseStackElement::Map(h, None)) = stack.pop() {h}
-                    else { return Err(ParseError::Syntax("unexpected '}'")) };
-                peek.next()?;
+                    else { return ParseOutput::err(
+                            ParseContext::Other,
+                            ParseError::Syntax("unexpected '}'")) };
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
                 Value::from(ValueData::Map(h))
             } else if c == '"' {
-                peek.next()?;
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
 
                 // read a quoted string
                 let mut escaped = false;
                 let mut s = String::with_capacity(32);
                 loop {
-                    let c = peek.next()?;
+                    let c = match peek.next() {
+                        Ok(c) => c,
+                        Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                          ParseError::Stream(e))
+                    };
                     if escaped {
                         match c {
                             'n' => s.push('\n'),
@@ -473,34 +609,57 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
             } else if c == '\'' {
                 // use the built-in quote macro
                 stack.push(ParseStackElement::Quote);
-                peek.next()?;
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
                 continue;
             } else if c == '$' {
-                peek.next()?;
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
                 let c = peek.peek().map(Some)
-                            .or_else(|e| if e.is_eof() {Ok(None)} else {Err(e)})?;
+                            .or_else(|e| if e.is_eof() {Ok(None)} else {Err(e)});
+                let c = match c {
+                    Ok(c) => c,
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                };
                 if let Some(c) = c {
                     if c == '(' {
                         if in_lambda {
-                            return Err(ParseError::Syntax(
-                                "lambda functions cannot be nested"));
+                            return ParseOutput::err(
+                                ParseContext::Other,
+                                ParseError::Syntax(
+                                    "lambda functions cannot be nested"));
                         }
                         in_lambda = true;
                         lambda_args = 0;
                         stack.push(ParseStackElement::Lambda);
                         stack.push(ParseStackElement::List(Vec::new()));
-                        peek.next()?;
+                        match peek.next() {
+                            Ok(_) => {},
+                            Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                              ParseError::Stream(e))
+                        }
                         continue;
                     }
                 }
                 peek.push('$');
 
-                let id = read_identifier(peek)?;
+                let id = read_identifier(peek);
+                if id.result.is_err() { return id.map_err(); }
+                let id = id.result.unwrap();
+
                 if id.as_ref() == "$" {
                     if in_lambda {
                         if lambda_args > 1 {
-                            return Err(ParseError::Syntax(
-                                    "mixing $ and $N forms is not allowed"));
+                            return ParseOutput::err(ParseContext::Other,
+                                                    ParseError::Syntax(
+                                        "mixing $ and $N forms is not allowed"));
                         }
                         lambda_args = -1;
                     }
@@ -509,7 +668,8 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                     let c = id.as_ref().chars().skip(1).next().unwrap();
                     if c.is_digit(10) && in_lambda {
                         if lambda_args < 0 {
-                            return Err(ParseError::Syntax(
+                            return ParseOutput::err(ParseContext::Other,
+                                ParseError::Syntax(
                                     "mixing $ and $N forms is not allowed"));
                         }
                         let n = c.to_digit(10).unwrap() as i32;
@@ -526,21 +686,40 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                 if let Ok(r) = r { Value::from(r) }
                 else {
                     // fall back to symbol
-                    Value::from(read_identifier(peek)?)
+                    let r = read_identifier(peek);
+                    if r.result.is_err() { return r.map_err(); }
+                    Value::from(r.result.unwrap())
                 }
             } else if c == '|' {
                 // special handling for pipe symbols since literally any char
                 // can be inside of a |x> separator
-                peek.next()?;
+                match peek.next() {
+                    Ok(_) => {},
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                }
 
                 // read forward to see if there's a terminator
-                let fwd = peek.next()?;
+                let fwd = match peek.next() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                };
 
                 if fwd == '>' {
                     Value::from(Identifier::from(format!("|>")))
                 } else {
-                    if peek.peek()? == '>' {
-                        peek.next()?;
+                    let p = match peek.peek() {
+                        Ok(r) => r,
+                        Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                          ParseError::Stream(e))
+                    };
+                    if p == '>' {
+                        match peek.next() {
+                            Ok(_) => {},
+                            Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                              ParseError::Stream(e))
+                        }
                         Value::from(Identifier::from(format!("|{}>", fwd)))
                     } else {
                         peek.push(fwd);
@@ -548,8 +727,14 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                     }
                 }
             } else if c == ':' { // read atom if followed by something
-                let c = peek.next()?;
-                let id = read_identifier(peek)?;
+                let c = match peek.next() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::Stream(e))
+                };
+                let id = read_identifier(peek);
+                if id.result.is_err() {return id.map_err();}
+                let id = id.result.unwrap();
 
                 if valid_identifier_char(c) {
                     Value::atom(id.0.as_ref())
@@ -557,7 +742,10 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                     Value::from(id)
                 }
             } else {
-                let id = read_identifier(peek)?;
+                let id = read_identifier(peek);
+                if id.result.is_err() {return id.map_err();}
+                let id = id.result.unwrap();
+
                 if id.0.as_str() == "true" {
                     Value::from(true)
                 } else if id.0.as_str() == "false" {
@@ -577,11 +765,21 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                     break;
                 },
                 Some(&mut ParseStackElement::Map(ref mut m, ref mut s)) => {
-                    if let Some(k) = s.take() { m.insert(k, res); }
-                    else if let Some(h) = res.hash()? { *s = Some(h); }
-                    else {
-                        return Err(ParseError::from(EvalError::TypeError(
-                                String::from("unhashable key in map literal"))));
+                    if let Some(k) = s.take() {
+                        m.insert(k, res);
+                    } else {
+                        let h = match res.hash() {
+                            Ok(r) => r,
+                            Err(e) => return ParseOutput::err(
+                                ParseContext::Other, ParseError::from(e))
+                        };
+                        if let Some(h) = h { *s = Some(h); }
+                        else { return ParseOutput::err(
+                                ParseContext::Other,
+                                ParseError::from(
+                                    EvalError::TypeError(String::from(
+                                            "unhashable key in map literal"))));
+                        }
                     }
                     break;
                 },
@@ -614,13 +812,13 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                     in_lambda = false;
                     lambda_args = 0;
                 },
-                None => return Ok((res))
+                None => return ParseOutput::ok(ParseContext::Other, res)
             }
             stack.pop();
         }
     };
 
-    if let Err(ParseError::UnexpectedEOF) = result {
+    if let Err(ParseError::UnexpectedEOF) = result.result {
         // handle autoclose
         if conf.autoclose {
             let mut res = None;
@@ -665,7 +863,7 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
                 }
             }
             if let Some(res) = res {
-                return Ok(res);
+                return ParseOutput::ok(ParseContext::Other, res);
             }
         }
     }
@@ -676,12 +874,12 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> Parse<(Value)> {
 /// 
 /// This returns either an evaluation failure or a (read value, unconsumed char)
 /// pair. In most cases the unconsumed character can be ignored.
-pub fn read<R: CharStream>(strm: &R) -> Parse<Value> {
+pub fn read<R: CharStream>(strm: &R) -> ParseOutput<Value> {
     internal_read(strm, ReadOptions::default())
 }
 
 /// Read a Lisp form, autoclosing if needed
-pub fn read_autoclose<R: CharStream>(strm: &mut R) -> Parse<Value> {
+pub fn read_autoclose<R: CharStream>(strm: &mut R) -> ParseOutput<Value> {
     let mut opts = ReadOptions::default();
     opts.autoclose = true;
     internal_read(strm, opts)
@@ -691,7 +889,7 @@ pub fn read_autoclose<R: CharStream>(strm: &mut R) -> Parse<Value> {
 /// 
 /// This just reads forms from the input and processes them into a pipeline.
 /// Reader macros run *before* this sees the forms.
-pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
+pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
     let mut pipeline = Pipeline {
         elements: Vec::new(),
         terminals: Vec::new()
@@ -730,20 +928,30 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
 
     loop {
         let tok = internal_read(strm, ReadOptions::pipeline()).map(Some)
-                 .or_else(|e| match e {
-                     ParseError::UnexpectedEOF => Ok(None),
-                     e => Err(e)
-                 })?;
+                 .or_else(|c,e| match e {
+                     ParseError::UnexpectedEOF => ParseOutput::ok(
+                         ParseContext::Other, None),
+                     e => ParseOutput::err(c, e)
+                 });
+        if tok.result.is_err() { return tok.map_err(); }
+        let tok = tok.result.unwrap();
 
         match s {
             PRS::S => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
-                if let Some(sym) = tok.get_symbol()? {
+                          else { return ParseOutput::err(
+                                  ParseContext::Value,
+                                  ParseError::UnexpectedEOF) };
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::generic_err(ParseError::from(e))
+                };
+                if let Some(sym) = sym {
                     // check if it's a pipe separator
                     if get_pipe(&sym).is_some() {
-                        return Err(ParseError::Syntax(
-                                "invalid pipeline"));
+                        return ParseOutput::err(
+                            ParseContext::Symbol(sym.as_ref().to_owned()),
+                            ParseError::Syntax("invalid pipeline"));
                     } else {
                         s = PRS::F;
                         cur_component.push(tok);
@@ -761,10 +969,15 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
                         link: None
                     };
                     pipeline.elements.push(part);
-                    return Ok(pipeline);
+                    return ParseOutput::ok(ParseContext::Value, pipeline);
                 };
 
-                if let Some(sym) = tok.get_symbol()? {
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::Value,
+                                                      ParseError::from(e))
+                };
+                if let Some(sym) = sym {
                     // check if it's a pipe separator
                     let mut pipe_mode = None;
                     let next_state =
@@ -795,11 +1008,20 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
             },
             PRS::Pipe => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
-                if let Some(sym) = tok.get_symbol()? {
+                          else { return ParseOutput::generic_err(
+                                  ParseError::UnexpectedEOF) };
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::from(e))
+                };
+
+                if let Some(sym) = sym {
                     // check if it's a pipe separator
                     if get_pipe(&sym).is_some() {
-                        return Err(ParseError::Syntax("invalid pipeline"));
+                        return ParseOutput::err(
+                            ParseContext::Other,
+                            ParseError::Syntax("invalid pipeline"));
                     } else {
                         s = PRS::F;
                         cur_component.push(tok);
@@ -811,81 +1033,157 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
             },
             PRS::OutReplaceFile => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
+                          else { return ParseOutput::err(
+                                  ParseContext::File,
+                                  ParseError::UnexpectedEOF) };
                 
                 // evaluate the token and try converting to a string
-                let res = tok.evaluate(&::environment::empty())?;
-                let t = res.into_str()?;
+                let res = match tok.evaluate(&::environment::empty()) {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::File,
+                                                      ParseError::from(e))
+                };
+                let t = match res.into_str() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::File,
+                                                      ParseError::from(e))
+                };
                 pipeline.terminals.push(TerminalMode::ReplaceFile(t));
-                if in_done { return Ok(pipeline); }
+                if in_done { return ParseOutput::ok(ParseContext::File,
+                                                    pipeline); }
                 else { s = PRS::TerminalDone; out_done = true; }
             },
             PRS::OutAppendFile => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
+                          else { return ParseOutput::err(
+                                  ParseContext::File,
+                                  ParseError::UnexpectedEOF) };
                 
                 // evaluate the token and try converting to a string
-                let res = tok.evaluate(&::environment::empty())?;
-                let t = res.into_str()?;
+                let res = match tok.evaluate(&::environment::empty()) {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::File,
+                                                      ParseError::from(e))
+                };
+                let t = match res.into_str() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::File,
+                                                      ParseError::from(e))
+                };
                 pipeline.terminals.push(TerminalMode::AppendFile(t));
-                if in_done { return Ok(pipeline); }
+                if in_done { return ParseOutput::ok(ParseContext::File,
+                                                    pipeline); }
                 else { s = PRS::TerminalDone; out_done = true; }
             },
             PRS::OutReplaceVar => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
+                          else { return ParseOutput::err(
+                                  ParseContext::Symbol(String::from("")),
+                                  ParseError::UnexpectedEOF) };
                 
-                if let Some(sym) = tok.get_symbol()? {
-                    pipeline.terminals.push(TerminalMode::SetVariable(sym));
-                    if in_done { return Ok(pipeline); }
-                    else { s = PRS::TerminalDone; out_done = true; }
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(
+                        ParseContext::Symbol(String::from("")),
+                        ParseError::from(e))
+                };
+                if let Some(sym) = sym {
+                    pipeline.terminals.push(
+                        TerminalMode::SetVariable(sym.clone()));
+                    if in_done {
+                        return ParseOutput::ok(
+                            ParseContext::Symbol(sym.as_ref().to_owned()),
+                            pipeline);
+                    } else { s = PRS::TerminalDone; out_done = true; }
                 } else {
-                    return Err(ParseError::Syntax(
-                            "expected symbol as output target"));
+                    return ParseOutput::err(
+                        ParseContext::Symbol(String::from("")),
+                        ParseError::Syntax("expected symbol as output target"));
                 }
             },
             PRS::OutAppendVar => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
+                          else { return ParseOutput::err(
+                                  ParseContext::Symbol(String::from("")),
+                                  ParseError::UnexpectedEOF) };
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(
+                        ParseContext::Symbol(String::from("")),
+                        ParseError::from(e))
+                };
                 
-                if let Some(sym) = tok.get_symbol()? {
-                    pipeline.terminals.push(TerminalMode::AppendVariable(sym));
-                    if in_done { return Ok(pipeline); }
-                    else { s = PRS::TerminalDone; out_done = true; }
+                if let Some(sym) = sym {
+                    pipeline.terminals.push(
+                        TerminalMode::AppendVariable(sym.clone()));
+                    if in_done {
+                        return ParseOutput::ok(
+                            ParseContext::Symbol(sym.as_ref().to_owned()),
+                            pipeline);
+                    } else { s = PRS::TerminalDone; out_done = true; }
                 } else {
-                    return Err(ParseError::Syntax(
-                            "expected symbol as output target"));
+                    return ParseOutput::err(
+                        ParseContext::Symbol(String::from("")),
+                        ParseError::Syntax("expected symbol as output target"));
                 }
             },
             PRS::InFile => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
+                          else { return ParseOutput::err(
+                                  ParseContext::File,
+                                  ParseError::UnexpectedEOF) };
                 
                 // evaluate the token and try converting to a string
-                let res = tok.evaluate(&::environment::empty())?;
-                let t = res.into_str()?;
+                let res = match tok.evaluate(&::environment::empty()) {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::File,
+                                                      ParseError::from(e))
+                };
+                let t = match res.into_str() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::File,
+                                                      ParseError::from(e))
+                };
                 pipeline.terminals.push(TerminalMode::InputFile(t));
-                if out_done { return Ok(pipeline); }
+                if out_done { return ParseOutput::ok(ParseContext::File,
+                                                     pipeline); }
                 else { s = PRS::TerminalDone; in_done = true; }
             },
             PRS::InVar => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Err(ParseError::UnexpectedEOF) };
+                          else { return ParseOutput::err(
+                                  ParseContext::Symbol(String::from("")),
+                                  ParseError::UnexpectedEOF) };
                 
-                if let Some(sym) = tok.get_symbol()? {
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(
+                        ParseContext::Symbol(String::from("")),
+                        ParseError::from(e))
+                };
+                if let Some(sym) = sym {
                     pipeline.terminals.push(TerminalMode::InputVar(sym));
-                    if out_done { return Ok(pipeline); }
+                    if out_done { return ParseOutput::ok(
+                            ParseContext::Symbol(String::from("")),
+                            pipeline); }
                     else { s = PRS::TerminalDone; in_done = true; }
                 } else {
-                    return Err(ParseError::Syntax(
-                            "expected symbol as output target"));
+                    return ParseOutput::err(
+                        ParseContext::Symbol(String::from("")),
+                        ParseError::Syntax("expected symbol as output target"));
                 }
             },
             PRS::TerminalDone => {
                 let tok = if let Some(tok) = tok { tok }
-                          else { return Ok(pipeline); };
+                          else { return ParseOutput::ok(ParseContext::Other,
+                                                        pipeline); };
 
-                if let Some(sym) = tok.get_symbol()? {
+                let sym = match tok.get_symbol() {
+                    Ok(r) => r,
+                    Err(e) => return ParseOutput::err(ParseContext::Other,
+                                                      ParseError::from(e))
+                };
+                if let Some(sym) = sym {
                     let (out,st) =
                         if sym.as_ref() == ">" {(true,PRS::OutReplaceFile)}
                         else if sym.as_ref() == ">>" {(true,PRS::OutAppendFile)}
@@ -894,21 +1192,32 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> Parse<Pipeline> {
                         else if sym.as_ref() == "<" {(false,PRS::InFile)}
                         else if sym.as_ref() == "<=" {(false,PRS::InVar)}
                         else {
-                            return Err(ParseError::Syntax(
+                            return ParseOutput::err(
+                                ParseContext::Other,
+                                ParseError::Syntax(
                                     "unexpected symbol in output position")); 
                         };
                     if out {
-                        if out_done { return Err(ParseError::Syntax(
-                                    "cannot specify two output targets")); }
+                        if out_done {
+                            return ParseOutput::err(
+                                ParseContext::Other,
+                                ParseError::Syntax(
+                                    "cannot specify two output targets"));
+                        }
                         s = st;
                     } else {
-                        if in_done { return Err(ParseError::Syntax(
-                                    "cannot specify two input targets")); }
+                        if in_done {
+                            return ParseOutput::err(
+                                ParseContext::Other,
+                                ParseError::Syntax(
+                                    "cannot specify two input targets"));
+                        }
                         s = st;
                     }
                 } else {
-                    return Err(ParseError::Syntax(
-                            "expected terminal or end of input"));
+                    return ParseOutput::err(
+                        ParseContext::Other,
+                        ParseError::Syntax("expected terminal or end of input"));
                 }
             },
         }

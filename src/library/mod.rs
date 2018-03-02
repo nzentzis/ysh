@@ -17,7 +17,7 @@ fn run_string(s: &'static str) {
     let f = ReadWrapper::new(&mut cursor);
     let mut env = ::environment::empty();
     loop {
-        let m = match ::reader::read(&f) {
+        let m = match ::reader::read(&f).result {
             Ok(r) => r,
             Err(e) => if let ParseError::UnexpectedEOF = e {break;}
                       else {panic!("Failed to parse Lisp core library")}
