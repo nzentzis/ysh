@@ -252,6 +252,46 @@ pub struct CompletionSet {
 }
 
 impl CompletionSet {
+    /// Infer appropriate completion settings from current parse result and call
+    /// `complete` with them.
+    pub fn complete_smart(seed: &str,
+                          partial: &::reader::ParseOutput<Pipeline>) -> Self {
+        use reader::{ParseOutput, ParseContext};
+
+        // TODO: use partial tree state to figure out whether they're typing a
+        //       command or shell form, and use that to enable/disable filename
+        //       completion
+
+        // TODO: implementing seeding properly here requires the reader to give
+        //       back a partial parse tree to work from
+
+        let s = match partial.context {
+            ParseContext::Symbol(_) => {
+                vec![EntryType::FunctionBinding,
+                     EntryType::VariableBinding,
+                     EntryType::SystemCommand,
+                     EntryType::File]
+            },
+            ParseContext::Value => {
+                vec![EntryType::FunctionBinding,
+                     EntryType::VariableBinding,
+                     EntryType::SystemCommand,
+                     EntryType::File]
+            },
+            ParseContext::File => {
+                vec![EntryType::VariableBinding, EntryType::File]
+            },
+            _ => {
+                vec![EntryType::FunctionBinding,
+                     EntryType::VariableBinding,
+                     EntryType::SystemCommand,
+                     EntryType::File,
+                     EntryType::OtherForm]
+            },
+        };
+        CompletionSet::complete(&seed, HashSet::from_iter(s))
+    }
+
     /// Utility function for calling `complete` with every entry type allowed
     pub fn complete_any(seed: &str) -> Self {
         CompletionSet::complete(seed, HashSet::from_iter(

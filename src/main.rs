@@ -159,6 +159,7 @@ fn init_environment() {
 
     env.set("dbg", Value::from(Executable::native(|_, args| {
             for a in args {
+                println!("object w/ loc={:?} name={:?}", a.loc, a.name);
                 for i in a.into_iter() {
                     println!("{:?}", i?);
                 }

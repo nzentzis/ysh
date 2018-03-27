@@ -212,7 +212,12 @@ impl<'a> ActiveEditor<'a> {
     /// This may later be replaced by a more general terminal user interface
     /// framework.
     fn trigger_completion(&mut self) -> io::Result<()> {
-        let res = CompletionSet::complete_any(&self.editor.buf().as_string());
+        // get a partial parse for the current context, so we know what kind of
+        // completion to perform
+        let buf = self.editor.buf().as_string();
+        let parse = read_pipeline(&mut ReadWrapper::new(&mut io::Cursor::new(&buf)));
+        let seed = buf.rsplit(' ').next().unwrap_or("");
+        let res = CompletionSet::complete_smart(seed, &parse);
 
         // handle the zero and one-completion cases
         if res.len() == 0 {

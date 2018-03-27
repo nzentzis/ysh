@@ -17,6 +17,8 @@ lazy_static! {
         = RwLock::new(HashMap::new());
 }
 
+// TODO: include source location in reader outputs
+
 enum ParseStackElement {
     List(Vec<Value>),
     Map(HashMap<ValueHash, Value>, Option<ValueHash>),
