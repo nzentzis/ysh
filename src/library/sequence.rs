@@ -2,6 +2,21 @@ use environment::*;
 use numeric::*;
 use data::*;
 
+lazy_static! {
+    static ref DOC_MAP: Documentation = Documentation::new()
+        .form(&["fn"])
+        .form(&["fn", "seq"])
+        .form(&["fn", "seqs*"])
+        .short("Map a function over one or more sequences")
+        .desc("Applies a function over the elements of one or more input\
+               sequences, and collects the results in a new sequence. If more\
+               than one input sequence is provided, each sequence will be used\
+for a successive parameter value. For example:
+
+    $ map concat (1 2 3) (4 5 6) (7 8 9)
+    ((1 4 7) (2 5 8) (3 6 9))");
+}
+
 struct MapIterator {
     func: Value,
     env: Environment,
@@ -375,7 +390,8 @@ pub fn initialize() {
     let env = global();
     
     // higher-order stuff
-    env.set("map", Value::from(Executable::native(fn_map)));
+    env.set("map", Value::from(Executable::native(fn_map))
+                  .document(&DOC_MAP));
     env.set("reduce", Value::from(Executable::native(fn_reduce)));
     env.set("filter", Value::from(Executable::native(fn_filter)));
 
