@@ -295,3 +295,38 @@ lazy_static! {
 pub fn db() -> &'static Database {
     &DB
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn basic() {
+        let mut db = Database::new();
+        assert_eq!(db.len(), 0);
+        assert_eq!(db.snapshot().len(), 0);
+
+        // insert elements in history
+        let p1 = Pipeline {
+            elements: vec![PipelineComponent {
+                xform: Transformer(vec![Value::str("test1")]),
+                link: None
+            }],
+            terminals: vec![]
+        };
+        let p2 = Pipeline {
+            elements: vec![PipelineComponent {
+                xform: Transformer(vec![Value::str("test2")]),
+                link: None
+            }],
+            terminals: vec![]
+        };
+        db.record(&p1);
+        assert_eq!(db.len(), 1);
+        assert_eq!(db.get(0), p1);
+        db.record(&p2);
+        assert_eq!(db.len(), 2);
+        assert_eq!(db.get(0), p2);
+        assert_eq!(db.get(1), p1);
+    }
+}

@@ -1283,7 +1283,7 @@ mod test {
         for (i,o) in cases {
             let r = read_identifier(
                 &mut ReadWrapper::new(&mut Cursor::new(&i[..])));
-            assert_eq!(r.unwrap(), Identifier::new(o));
+            assert_eq!(r.result.unwrap(), Identifier::new(o));
         }
     }
 
@@ -1326,7 +1326,7 @@ mod test {
             let r = internal_read(
                 &mut ReadWrapper::new(&mut Cursor::new(&i[..])),
                 ReadOptions::default());
-            assert_eq!(r.unwrap(), o);
+            assert_eq!(r.result.unwrap(), o);
         }
     }
 
@@ -1334,7 +1334,7 @@ mod test {
     fn pipelines() {
         let s = &b"foo bar | baz bax |> foo |~> bax > bar < foo"[..];
         let r = read_pipeline(&mut ReadWrapper::new(&mut Cursor::new(&s[..])))
-               .unwrap();
+               .result.unwrap();
         assert_eq!(r, Pipeline {
             elements: vec![
                 PipelineComponent {
