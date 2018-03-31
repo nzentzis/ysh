@@ -9,12 +9,42 @@ lazy_static! {
         .form(&["fn", "seqs*"])
         .short("Map a function over one or more sequences")
         .desc("Applies a function over the elements of one or more input\
-               sequences, and collects the results in a new sequence. If more\
-               than one input sequence is provided, each sequence will be used\
-for a successive parameter value. For example:
+               sequences, and collects the results in a new sequence. With only\
+               a function, build and return a transformer. If more than one\
+               input sequence is provided, each sequence will be used for a\
+               successive parameter value. For example:
 
     $ map concat (1 2 3) (4 5 6) (7 8 9)
     ((1 4 7) (2 5 8) (3 6 9))");
+    static ref DOC_LENGTH: Documentation = Documentation::new()
+        .form(&["as-seq*"])
+        .short("Get the length of input's sequential form")
+        .desc("If more than one input is provided, return a list of their\
+               lengths");
+    static ref DOC_EMPTY: Documentation = Documentation::new()
+        .form(&["as-seq*"])
+        .short("Check whether an input's sequential form is empty")
+        .desc("If more than one input is provided, return whether all inputs'\
+               sequential forms are empty.");
+    static ref DOC_FIRST: Documentation = Documentation::new()
+        .form(&["as-seq*"])
+        .short("Take the first element of an input sequence")
+        .desc("If the input is empty, returns ()");
+    static ref DOC_REST: Documentation = Documentation::new()
+        .form(&["as-seq*"])
+        .short("Remove the first element of an input sequence")
+        .desc("If the input is empty, returns ()");
+    static ref DOC_NTH: Documentation = Documentation::new()
+        .form(&["idx"])
+        .form(&["idx", "seq"])
+        .form(&["idx", "seq*"])
+        .short("Take a specific element of the input sequence(s)")
+        .desc("With only an index, build a transformer. With an index and one\
+               or more sequences, take the requested element of the input\
+               sequences. If more than one input sequence is provided, then\
+               return a list of N-th elements. If the given element isn't\
+               there, then either return () or omit it from the output\
+               sequence.");
 }
 
 struct MapIterator {
@@ -396,13 +426,18 @@ pub fn initialize() {
     env.set("filter", Value::from(Executable::native(fn_filter)));
 
     // queries
-    env.set("length", Value::from(Executable::native(fn_length)));
-    env.set("empty?", Value::from(Executable::native(fn_empty_q)));
+    env.set("length", Value::from(Executable::native(fn_length))
+                     .document(&DOC_LENGTH));
+    env.set("empty?", Value::from(Executable::native(fn_empty_q))
+                     .document(&DOC_EMPTY));
 
     // taking subranges
-    env.set("first", Value::from(Executable::native(fn_first)));
-    env.set("rest", Value::from(Executable::native(fn_rest)));
-    env.set("nth", Value::from(Executable::native(fn_nth)));
+    env.set("first", Value::from(Executable::native(fn_first))
+                    .document(&DOC_FIRST));
+    env.set("rest", Value::from(Executable::native(fn_rest))
+                   .document(&DOC_FIRST));
+    env.set("nth", Value::from(Executable::native(fn_nth))
+                  .document(&DOC_FIRST));
 
     // list-list ops
     env.set("concat", Value::from(Executable::native(fn_concat)));
