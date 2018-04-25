@@ -159,7 +159,9 @@ fn core_do(lex: &Environment, args: &[Value]) -> Eval<Value> {
         }
 
         // tail call optimization
-        args[args.len()-1].evaluate(lex)
+        let f = args[args.len()-1].clone();
+        let lex = lex.to_owned();
+        Eval::Indirect(Box::new(move || f.evaluate(&lex)))
     } else {
         Eval::from(Ok(Value::empty()))
     }

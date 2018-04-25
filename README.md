@@ -9,7 +9,7 @@ high-level expressive power, and familiarity to those used to POSIX-like shells.
     -[ ] Reader macros
     -[X] Hashmap type
     -[ ] Arbitrary-precision arithmetic support in numeric tower
-    -[ ] Guaranteed tail-call optimization
+    -[X] Guaranteed tail-call optimization
     -[X] Atoms
     -[X] Symbol/atom interning
     -[ ] Exceptions and handling
