@@ -1,6 +1,7 @@
 use environment::*;
 use numeric::*;
 use data::*;
+use evaluate::*;
 
 lazy_static! {
     static ref DOC_ADD: Documentation = Documentation::new()
@@ -108,7 +109,7 @@ fn fn_add(_: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut ns = Vec::new();
     for i in args.iter() {
-        match i.into_num()? {
+        match i.into_num().wait()? {
             Some(n) => ns.push(n),
             _ => return Err(EvalError::TypeError(
                     String::from("non-numeric adds not yet implemented")))
@@ -122,7 +123,7 @@ fn fn_mul(_: &Environment, args: &[Value]) -> EvalResult {
     // require that all args are numbers
     let mut ns = Vec::new();
     for i in args.iter() {
-        match i.into_num()? {
+        match i.into_num().wait()? {
             Some(n) => ns.push(n),
             _ => return Err(EvalError::TypeError(
                     String::from("non-numeric multiply not yet implemented")))
@@ -141,18 +142,18 @@ fn fn_sub(_: &Environment, args: &[Value]) -> EvalResult {
             expected: 1
         })
     } else if args.len() == 1 {
-        let n = if let Some(n) = args[0].into_num()? { n }
+        let n = if let Some(n) = args[0].into_num().wait()? { n }
                 else { return Err(EvalError::TypeError(
                             String::from("cannot negate non-numeric type"))) };
         Ok(Value::from(-n))
     } else {
         let mut n =
-            if let Some(n) = args[0].into_num()? { n }
+            if let Some(n) = args[0].into_num().wait()? { n }
             else { return Err(EvalError::TypeError(
                         String::from("cannot subtract from non-numeric type")))};
 
         for i in args[1..].iter() {
-            if let Some(x) = i.into_num()? {
+            if let Some(x) = i.into_num().wait()? {
                 n -= x;
             } else {
                 return Err(EvalError::TypeError(
@@ -172,10 +173,10 @@ fn fn_div(_: &Environment, args: &[Value]) -> EvalResult {
             expected: 2
         })
     } else {
-        let m = if let Some(n) = args[0].into_num()? { n }
+        let m = if let Some(n) = args[0].into_num().wait()? { n }
                 else { return Err(EvalError::TypeError(
                         String::from("cannot divide non-numeric type")))};
-        let n = if let Some(n) = args[1].into_num()? { n }
+        let n = if let Some(n) = args[1].into_num().wait()? { n }
                 else { return Err(EvalError::TypeError(
                         String::from("cannot divide non-numeric type")))};
 
@@ -188,7 +189,7 @@ fn fn_inc(_: &Environment, args: &[Value]) -> EvalResult {
     let mut rs = Vec::new();
     let one = Number::int(1);
     for i in args.iter() {
-        match i.into_num()? {
+        match i.into_num().wait()? {
             Some(n) => rs.push(n + &one),
             _ => return Err(EvalError::TypeError(
                     String::from("non-numeric adds not yet implemented")))
@@ -230,7 +231,7 @@ fn fn_equal(_: &Environment, args: &[Value]) -> EvalResult {
 /// Return whether all passed arguments are integers
 fn int_q(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().map(|x| x.into_num())
-                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Eval<Vec<_>>>().wait()?.into_iter()
                        .collect::<Option<Vec<_>>>()
                        .map(|v| v.into_iter().all(|n| n.is_integer()))
                        .unwrap_or(false)))
@@ -239,7 +240,7 @@ fn int_q(_: &Environment, args: &[Value]) -> EvalResult {
 /// Return whether all passed arguments are rationals
 fn rational_q(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().map(|x| x.into_num())
-                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Eval<Vec<_>>>().wait()?.into_iter()
                        .collect::<Option<Vec<_>>>()
                        .map(|v| v.into_iter().all(|n| n.is_rational()))
                        .unwrap_or(false)))
@@ -248,7 +249,7 @@ fn rational_q(_: &Environment, args: &[Value]) -> EvalResult {
 /// Return whether all passed arguments are reals
 fn real_q(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().map(|x| x.into_num())
-                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Eval<Vec<_>>>().wait()?.into_iter()
                        .collect::<Option<Vec<_>>>()
                        .map(|v| v.into_iter().all(|n| n.is_real()))
                        .unwrap_or(false)))
@@ -257,7 +258,7 @@ fn real_q(_: &Environment, args: &[Value]) -> EvalResult {
 /// Return whether all passed arguments are complex
 fn complex_q(_: &Environment, args: &[Value]) -> EvalResult {
     Ok(Value::from(args.iter().map(|x| x.into_num())
-                       .collect::<Eval<Vec<_>>>()?.into_iter()
+                       .collect::<Eval<Vec<_>>>().wait()?.into_iter()
                        .collect::<Option<Vec<_>>>()
                        .map(|v| v.into_iter().all(|n| n.is_complex()))
                        .unwrap_or(false)))
@@ -269,7 +270,7 @@ fn ord_compare<F>(args: &[Value], f: F) -> EvalResult
     if args.is_empty() { return Ok(Value::from(true)) }
     let mut last = None;
     for i in args.into_iter() {
-        let v = i.into_num()?
+        let v = i.into_num().wait()?
                  .ok_or(EvalError::TypeError(
                          String::from("value is not number-like")))?;
         if let &Some(ref l) = &last {
@@ -333,10 +334,10 @@ fn fn_set(_: &Environment, args: &[Value]) -> EvalResult {
                 }
                 let pairs = arg_pairs.into_iter()
                            .map(|(k,v)|
-                                if let Some(h) = k.hash()? {Ok((h,v))}
+                                if let Some(h) = k.hash().wait()? {Ok((h,v))}
                                 else {Err(EvalError::TypeError(String::from(
                                                 "set keys must be hashable")))})
-                           .collect::<Eval<Vec<_>>>()?;
+                           .collect::<EvalRes<Vec<_>>>()?;
 
                 let mut r = m.to_owned();
                 for (h,v) in pairs {
@@ -460,12 +461,12 @@ mod test {
         assert!(fn_equal(&e, &[]).is_err());
 
         let v = fn_equal(&e, &[Value::from(Number::int(2))]).unwrap();
-        assert!(v.execute(&e, &[]).is_err());
-        assert_eq!(v.execute(&e, &[Value::from(Number::int(2))]).unwrap(),
+        assert!(v.execute(&e, &[]).wait().is_err());
+        assert_eq!(v.execute(&e, &[Value::from(Number::int(2))]).wait().unwrap(),
                    Value::from(true));
-        assert_eq!(v.execute(&e, &[Value::from(Number::int(3))]).unwrap(),
+        assert_eq!(v.execute(&e, &[Value::from(Number::int(3))]).wait().unwrap(),
                    Value::from(false));
-        assert_eq!(v.execute(&e, &[Value::str("foo")]).unwrap(),
+        assert_eq!(v.execute(&e, &[Value::str("foo")]).wait().unwrap(),
                    Value::from(false));
     }
 

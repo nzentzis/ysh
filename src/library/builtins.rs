@@ -1,5 +1,6 @@
 use environment::*;
 use data::*;
+use evaluate::*;
 
 lazy_static! {
     static ref DOC_CD: Documentation = Documentation::new()
@@ -12,7 +13,7 @@ lazy_static! {
         .desc("Ignores any given arguments.");
 }
 
-fn check_result<T>(e: ::nix::Result<T>) -> Eval<T> {
+fn check_result<T>(e: ::nix::Result<T>) -> EvalRes<T> {
     use nix::Error;
 
     e.map_err(|e| {
@@ -35,7 +36,7 @@ fn fn_cd(_: &Environment, args: &[Value]) -> EvalResult {
             expected: 1
         })
     } else {
-        let s = args[0].into_str()?;
+        let s = args[0].into_str().wait()?;
         check_result(::nix::unistd::chdir(&s[..]))
             .map(|_| Value::empty())
     }

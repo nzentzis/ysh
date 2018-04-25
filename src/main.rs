@@ -4,6 +4,7 @@ extern crate termion;
 extern crate libc;
 extern crate nix;
 extern crate parking_lot;
+extern crate futures;
 
 // base modules
 #[macro_use] mod util;
@@ -39,7 +40,8 @@ use nix::sys::signal;
 
 use environment::{Environment, global};
 use pipeline::{Plan, PlanningError};
-use data::{Value, ValueLike, Executable, EvalResult, Eval};
+use data::{Value, ValueLike, EvalResult, Eval};
+use evaluate::Executable;
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 
@@ -68,15 +70,16 @@ fn locate_executable(env: &Environment, args: &[Value]) -> EvalResult {
 
     let paths = if let Some(p) = env.get("path") { p }
                 else { return Ok(Value::empty()) };
-    let paths: Vec<String> = paths.into_seq()?
+    let paths: Vec<String> = paths.into_seq().wait()?
                                   .into_iter()
                                   .map(|x| x.into_str())
-                                  .collect::<Eval<Vec<String>>>()?;
+                                  .collect::<Eval<Vec<String>>>()
+                                  .wait()?;
     
     // search for the requested files
     let mut res = Vec::with_capacity(args.len());
     for f in args {
-        let f = f.clone().into_str()?;
+        let f = f.clone().into_str().wait()?;
         for p in paths.iter() {
             let pth = Path::new(p).join(&f);
             if pth.exists() {
@@ -98,7 +101,7 @@ impl EnvProxy {
             ::std::env::vars_os()
                 .map(|(k,v)| {
                     let k = Value::str(k.to_string_lossy())
-                                  .hash()
+                                  .hash().wait()
                                   .unwrap() // direct strings are hashable
                                   .unwrap();
                     let v = Value::str(v.to_string_lossy());
@@ -128,9 +131,9 @@ impl environment::BindingProxy for EnvProxy {
 
         for (k,v) in val.iter() {
             // abort on conversion fail
-            let k = if let Ok(k) = k.val.into_str() {k}
+            let k = if let Ok(k) = k.val.into_str().wait() {k}
                     else {return};
-            let v = if let Ok(v) = v.into_str() {v}
+            let v = if let Ok(v) = v.into_str().wait() {v}
                     else {return};
             ::std::env::set_var(k, v);
         }
@@ -151,7 +154,7 @@ fn init_environment() {
     env.set("print-lines", Value::from(Executable::native(|_, args| {
             for a in args {
                 for i in a.into_iter() {
-                    println!("{}", i?.into_str()?);
+                    println!("{}", i?.into_str().wait()?);
                 }
             }
             Ok(Value::empty())

@@ -5,6 +5,7 @@ use std::boxed::Box;
 use span::*;
 use data::*;
 use numeric::*;
+use evaluate::*;
 use super::{CharStream, StreamError};
 
 #[derive(Clone, Copy, Debug)]
@@ -160,9 +161,9 @@ struct LineIterator {
 }
 
 impl Iterator for LineIterator {
-    type Item = Eval<Value>;
+    type Item = EvalResult;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalResult> {
         match self.stream.next_line() {
             Ok(r) => r.map(Value::new).map(Ok),
             Err(e) => Some(Err(EvalError::IO(e)))
@@ -171,18 +172,20 @@ impl Iterator for LineIterator {
 }
 
 impl ValueLike for PolyStream {
-    fn into_seq(&self) -> Eval<Vec<Value>> { self.into_iter().collect() }
+    fn into_seq(&self) -> Eval<Vec<Value>> {
+        Eval::from(self.into_iter().collect::<Result<_, _>>())
+    }
 
     fn into_iter(&self) -> ValueIteratorBox {
         Box::new(LineIterator { stream: self.inner.clone() })
     }
 
-    fn evaluate(&self, _env: &::environment::Environment) -> EvalResult {
-        Ok(Value::new(PolyStream { inner: self.inner.clone() }))
+    fn evaluate(&self, _env: &::environment::Environment) -> Eval<Value> {
+        Eval::from(Ok(Value::new(PolyStream { inner: self.inner.clone() })))
     }
 
     fn into_str(&self) -> Eval<String> {
-        Ok(String::from("<polystream>"))
+        Eval::from(Ok(String::from("<polystream>")))
     }
 
     fn into_args(&self) -> Eval<Vec<String>> {
@@ -412,16 +415,18 @@ impl PolyLine {
 
 impl ValueLike for PolyLine {
     fn into_iter(&self) -> ValueIteratorBox {
-        Box::new(self.fields.clone().into_iter().map(Value::new).map(Ok))
+        Box::new(self.fields.clone().into_iter()
+                     .map(Value::new)
+                     .map(Ok))
     }
 
-    fn evaluate(&self, _env: &::environment::Environment) -> EvalResult {
-        Ok(Value::new(self.clone()))
+    fn evaluate(&self, _env: &::environment::Environment) -> Eval<Value> {
+        Eval::from(Ok(Value::new(self.clone())))
     }
 
     fn into_str(&self) -> Eval<String> {
         let x = self.data.copy(..);
-        Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
+        Eval::from(Ok(String::from_utf8_lossy(x.as_slice()).into_owned()))
     }
 
     fn first(&self) -> Eval<Option<Value>> {
@@ -465,13 +470,13 @@ impl ValueLike for PolyField {
         Box::new(Value::new(self.to_owned()).into_iter())
     }
 
-    fn evaluate(&self, _env: &::environment::Environment) -> EvalResult {
-        Ok(Value::new(self.to_owned()))
+    fn evaluate(&self, _env: &::environment::Environment) -> Eval<Value> {
+        Eval::from(Ok(Value::new(self.to_owned())))
     }
 
     fn into_str(&self) -> Eval<String> {
         let x = self.data.copy(..);
-        Ok(String::from_utf8_lossy(x.as_slice()).into_owned())
+        Eval::from(Ok(String::from_utf8_lossy(x.as_slice()).into_owned()))
     }
 
     fn into_num(&self) -> Eval<Option<Number>> {
@@ -482,14 +487,14 @@ impl ValueLike for PolyField {
         let n = parse_number(data.as_slice());
 
         if let Ok(n) = n.result {
-            Ok(Some(n))
+            Eval::from(Ok(Some(n)))
         } else {
-            Ok(None)
+            Eval::from(Ok(None))
         }
     }
 
     fn first(&self) -> Eval<Option<Value>> {
-        Ok(Some(Value::new(self.to_owned())))
+        Eval::from(Ok(Some(Value::new(self.to_owned()))))
     }
 }
 
@@ -513,10 +518,10 @@ mod test {
         let opts = StreamOptions::new();
         let l = PolyLine::new_from(s1, opts);
 
-        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_str().wait().unwrap(), l_data);
         assert_eq!(l.into_iter()
-                    .map(|x| x.and_then(|v| v.into_str()))
-                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    .map(|x| x.and_then(|v| v.into_str().wait()))
+                    .collect::<EvalRes<Vec<_>>>().unwrap(),
                     vec!["1234", "abcd", "1.24", "6-7i"]);
     }
 
@@ -531,10 +536,10 @@ mod test {
         let opts = StreamOptions::new();
         let l = PolyLine::new_from(s1, opts);
 
-        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_str().wait().unwrap(), l_data);
         assert_eq!(l.into_iter()
-                    .map(|x| x.and_then(|v| v.into_str()))
-                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    .map(|x| x.and_then(|v| v.into_str().wait()))
+                    .collect::<EvalRes<Vec<_>>>().unwrap(),
                     vec!["1234", "abcd", "1.24", "6-7i"]);
     }
 
@@ -549,10 +554,10 @@ mod test {
         let opts = StreamOptions::new();
         let l = PolyLine::new_from(s1, opts);
 
-        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_str().wait().unwrap(), l_data);
         assert_eq!(l.into_iter()
-                    .map(|x| x.and_then(|v| v.into_str()))
-                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    .map(|x| x.and_then(|v| v.into_str().wait()))
+                    .collect::<EvalRes<Vec<_>>>().unwrap(),
                     vec!["1234", "abcd", "1.24", "6-7i"]);
     }
 
@@ -568,10 +573,11 @@ mod test {
         opts.delimiter('|');
         let l = PolyLine::new_from(s1, opts);
 
-        assert_eq!(l.into_str().unwrap(), l_data);
+        assert_eq!(l.into_str().wait().unwrap(), l_data);
         assert_eq!(l.into_iter()
-                    .map(|x| x.and_then(|v| v.into_str()))
-                    .collect::<Eval<Vec<_>>>().unwrap(),
+                    .map(|x| x.and_then(|v| v.into_str().wait()))
+                    .collect::<EvalRes<Vec<_>>>()
+                    .unwrap(),
                     vec!["1234", "abcd", "1.24", "6-7i"]);
     }
 }

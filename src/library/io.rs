@@ -1,6 +1,7 @@
 use environment::*;
 use data::*;
 use stream::*;
+use evaluate::*;
 
 lazy_static! {
     static ref DOC_INTO_READ: Documentation = Documentation::new()
@@ -47,7 +48,7 @@ fn fn_into_read(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    Ok(Value::raw_stream(args[0].into_raw_stream(true, false)?))
+    Ok(Value::raw_stream(args[0].into_raw_stream(true, false).wait()?))
 }
 
 /// Convert something into a writable stream
@@ -59,7 +60,7 @@ fn fn_into_write(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    Ok(Value::raw_stream(args[0].into_raw_stream(false, true)?))
+    Ok(Value::raw_stream(args[0].into_raw_stream(false, true).wait()?))
 }
 
 
@@ -72,7 +73,7 @@ fn fn_into_rw(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    Ok(Value::raw_stream(args[0].into_raw_stream(true, true)?))
+    Ok(Value::raw_stream(args[0].into_raw_stream(true, true).wait()?))
 }
 
 /// Peek at the next char in a stream
@@ -84,7 +85,7 @@ fn fn_peek(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    let s = args[0].into_raw_stream(true, false)?;
+    let s = args[0].into_raw_stream(true, false).wait()?;
     let c = s.peek()?;
     Ok(Value::str(format!("{}", c)))
 }
@@ -98,7 +99,7 @@ fn fn_next(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    let s = args[0].into_raw_stream(true, false)?;
+    let s = args[0].into_raw_stream(true, false).wait()?;
     let c = s.next()?;
     Ok(Value::str(format!("{}", c)))
 }
@@ -112,8 +113,8 @@ fn fn_push(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    let s = args[0].into_raw_stream(true, false)?;
-    let c = args[1].into_str()?;
+    let s = args[0].into_raw_stream(true, false).wait()?;
+    let c = args[1].into_str().wait()?;
     if c.len() != 1 {
         return Err(EvalError::TypeError(format!(
                     "expected char, found string of length {}", c.len())));
@@ -132,7 +133,7 @@ fn fn_next_line(_: &Environment, args: &[Value]) -> EvalResult {
         });
     }
 
-    let strm = args[0].into_raw_stream(true, false)?;
+    let strm = args[0].into_raw_stream(true, false).wait()?;
     let mut s = String::new();
 
     loop {

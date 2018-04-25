@@ -126,7 +126,7 @@ pub enum LaunchError {
 fn plan_transform(mut xform: Transformer)
         -> Result<PlanElement, PlanningError> {
     let first = xform.0[0].clone();
-    if let Some(s) = first.get_symbol().unwrap() {
+    if let Some(s) = first.get_symbol().wait().unwrap() {
         // try looking it up
         let r = global().get(&*(s.0));
 
@@ -147,7 +147,7 @@ fn plan_transform(mut xform: Transformer)
 
     // if it's not a string or symbol, just return it
     let cmd: String =
-        if let Some(s) = first.get_string().unwrap() { s }
+        if let Some(s) = first.get_string().wait().unwrap() { s }
         else {
             if xform.0.len() == 1 {
                 return Ok(PlanElement::Expression(first));
@@ -481,7 +481,7 @@ impl Plan {
                     // evaluate args
                     let args = args.into_iter()
                                    .map(|a| a.evaluate(&empty()))
-                                   .collect::<Eval<Vec<_>>>()
+                                   .collect::<Eval<Vec<_>>>().wait()
                                    .and_then(|a|
                                          a.into_iter()
                                           .map(|x| match &x.data {
@@ -499,28 +499,33 @@ impl Plan {
                                           .map(|x| match &x.data {
                                               &ValueData::Symbol(_) =>
                                                   run_fn("fs/glob", &[x.clone()])
+                                                 .map(|x| x.wait())
                                                  .unwrap_or(Ok(x.clone()))
                                                  .map(|l|
-                                                      if l.into_seq().unwrap().len() == 0 {
+                                                      if l.into_seq().wait()
+                                                          .unwrap().len() == 0 {
                                                           x.clone()
                                                       } else {
                                                           l
                                                       }),
                                               &ValueData::Str(_) =>
                                                   run_fn("fs/glob", &[x.clone()])
+                                                 .map(|x| x.wait())
                                                  .unwrap_or(Ok(x.clone()))
                                                  .map(|l|
-                                                      if l.into_seq().unwrap().len() == 0 {
+                                                      if l.into_seq()
+                                                          .wait().unwrap().len() == 0 {
                                                           x.clone()
                                                       } else {
                                                           l
                                                       }),
                                               _ => Ok(x)
                                           })
-                                          .collect::<Eval<Vec<Value>>>())
+                                          .collect::<Result<Vec<Value>, _>>())
                                    .and_then(|a| a.into_iter()
                                                   .map(|x| x.into_args())
-                                                  .collect::<Eval<Vec<_>>>())
+                                                  .collect::<Eval<Vec<_>>>()
+                                                  .wait())
                                    .map(|a| a.into_iter()
                                              .flat_map(|x| x)
                                              .collect::<Vec<_>>());
@@ -651,13 +656,13 @@ impl TransformEvaluation {
         use std::ops::Deref;
         if xform.is_executable() {
             return Value::list(vec![xform, inner])
-        } else if let Ok(Some(s)) = xform.get_symbol() {
+        } else if let Ok(Some(s)) = xform.get_symbol().wait() {
             // try looking up the symbol to get an executable result
             let val = global().get(s.0.deref());
             match val {
                 Some(ref x) if x.is_executable() => {
                     let mut arr = vec![x.deref().to_owned()];
-                    let args = if let Ok(r) = xform.into_seq() {r}
+                    let args = if let Ok(r) = xform.into_seq().wait() {r}
                                else {return xform;};
                     arr.extend(args.into_iter().skip(1));
                     arr.push(inner);
@@ -667,9 +672,9 @@ impl TransformEvaluation {
             }
         }
 
-        let modified_xform = xform.clone()
-                                  .macroexpand()
-                                  .and_then(|e| e.evaluate(&::environment::empty()));
+        let modified_xform = xform.clone().macroexpand().wait()
+                                  .and_then(|e| e.evaluate(&::environment::empty())
+                                                 .wait());
 
         if let Ok(m) = modified_xform {
             if m.is_executable() {
@@ -711,7 +716,7 @@ impl TransformEvaluation {
         }
 
         // macroexpand the expression before evaluating it
-        let expr = match innermost.macroexpand() {
+        let expr = match innermost.macroexpand().wait() {
             Ok(r) => r,
             Err(e) => {
                 println!("ysh: runtime error while expanding macro: {}",
@@ -724,7 +729,7 @@ impl TransformEvaluation {
         let out = output;
         job.spawn(move || {
             // TODO: error handling
-            let res = expr.evaluate(&::environment::empty());
+            let res = expr.evaluate(&::environment::empty()).wait();
             let mut term = terminal::acquire();
             let res = match res {
                 Ok(r) => r,
@@ -737,7 +742,7 @@ impl TransformEvaluation {
                 EvalOutput::PrettyStdout => {
                     // don't bother printing if they return null
                     if res != Value::empty() {
-                        match res.into_str() {
+                        match res.into_str().wait() {
                             Ok(s) => {
                                 writeln!(term.stdout(), "{}", s).unwrap();
                             },
@@ -753,7 +758,7 @@ impl TransformEvaluation {
                     let mut f = unsafe {
                         ::std::fs::File::from_raw_fd(fd.into_fd())
                     };
-                    match res.into_str() {
+                    match res.into_str().wait() {
                         Ok(r) => {write!(f, "{}", r).unwrap();},
                         Err(e) => {
                             writeln!(term.stderr(),

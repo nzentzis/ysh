@@ -1,6 +1,7 @@
 use environment::*;
 use numeric::*;
 use data::*;
+use evaluate::*;
 
 lazy_static! {
     static ref DOC_MAP: Documentation = Documentation::new()
@@ -54,22 +55,22 @@ struct MapIterator {
 }
 
 impl Iterator for MapIterator {
-    type Item = Eval<Value>;
+    type Item = EvalResult;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalResult> {
         // pull items from param items
         let items: Option<Vec<_>> = self.iters
                                         .iter_mut()
                                         .map(|x| x.next())
                                         .collect();
         if let Some(itms) = items {
-            let itms: Eval<Vec<_>> = itms.into_iter().collect();
+            let itms: EvalRes<Vec<_>> = itms.into_iter().collect();
             let itms = match itms {
                 Ok(i) => i,
                 Err(e) => return Some(Err(e))
             };
 
-            Some(self.func.execute(&self.env, itms.as_slice()))
+            Some(self.func.execute(&self.env, itms.as_slice()).wait())
         } else {
             None
         }
@@ -123,16 +124,16 @@ struct FilterIterator {
 }
 
 impl Iterator for FilterIterator {
-    type Item = Eval<Value>;
+    type Item = EvalResult;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalResult> {
         loop {
             if self.inputs.is_empty() { return None }
             if let Some(ref mut iter) = self.inputs.first_mut() {
                 if let Some(r) = iter.next() {
                     let r = if let Ok(r) = r { r } else { return Some(r) };
-                    let cond = self.func.execute(&self.env, &[r.clone()])
-                                        .and_then(|x| x.into_bool());
+                    let cond = self.func.execute(&self.env, &[r.clone()]).wait()
+                                        .and_then(|x| x.into_bool().wait());
                     let cond = if let Ok(c) = cond {c} else {
                         return Some(Err(cond.unwrap_err()))
                     };
@@ -188,9 +189,9 @@ fn reduce_impl(env: &Environment, func: &Value, init: &Value, args: &[Value]) ->
 
         if let Some(items) = items {
             let mut items: Vec<Value> = items.into_iter()
-                                             .collect::<Eval<Vec<_>>>()?;
+                                             .collect::<EvalRes<Vec<_>>>()?;
             items.insert(0, state.clone());
-            state = func.execute(env, items.as_slice())?;
+            state = func.execute(env, items.as_slice()).wait()?;
         } else {
             return Ok(state);
         }
@@ -246,7 +247,7 @@ fn fn_first(_: &Environment, args: &[Value]) -> EvalResult {
 fn fn_rest(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
         let itm = &args[0];
-        let res = itm.into_iter().skip(1).collect::<Eval<Vec<_>>>()?;
+        let res = itm.into_iter().skip(1).collect::<EvalRes<Vec<_>>>()?;
         Ok(Value::list(res))
     } else {
         Err(EvalError::Arity {
@@ -266,21 +267,23 @@ fn fn_rest(_: &Environment, args: &[Value]) -> EvalResult {
 /// If the given element isn't there, return ()
 fn fn_nth(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 { // build transformer
-        let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
+        let idx = if let Some(i) = args[0].into_num().wait()?
+                                          .map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
         Ok(Value::from(
                 Executable::native(move |_, args| {
                     let res = args.iter().filter_map(|v| v.into_iter()
                                          .nth(idx as usize))
-                                         .collect::<Eval<Vec<_>>>()?;
+                                         .collect::<EvalRes<Vec<_>>>()?;
                     if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
                     else { Ok(Value::list(res)) } })))
     } else if args.len() > 1 {
-        let idx = if let Some(i) = args[0].into_num()?.map(|x| x.round()) { i }
+        let idx = if let Some(i) = args[0].into_num().wait()?
+                                          .map(|x| x.round()) { i }
                   else { return Err(EvalError::TypeError(String::from("index must be numeric"))); };
         let res = args[1..].iter().filter_map(|v| v.into_iter()
                                                    .nth(idx as usize))
-                           .collect::<Eval<Vec<_>>>()?;
+                           .collect::<EvalRes<Vec<_>>>()?;
         if res.len() == 1 {
             Ok(res.into_iter().next().unwrap())
         } else {
@@ -299,9 +302,9 @@ struct ConcatIterator {
 }
 
 impl Iterator for ConcatIterator {
-    type Item = Eval<Value>;
+    type Item = EvalResult;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalResult> {
         if self.inner.is_empty() { return None }
 
         if let Some(ref mut iter) = self.inner.first_mut() {
@@ -317,11 +320,11 @@ impl Iterator for ConcatIterator {
 /// If more than one argument is given, return a list of lengths.
 fn fn_length(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
-        Ok(Value::from(Number::int(args[0].into_seq()?.len() as i64)))
+        Ok(Value::from(Number::int(args[0].into_seq().wait()?.len() as i64)))
     } else if args.len() > 1 {
         Ok(Value::list(args.iter()
                            .map(|x| x.into_seq())
-                           .collect::<Eval<Vec<Vec<_>>>>()?
+                           .collect::<Eval<Vec<Vec<_>>>>().wait()?
                            .into_iter()
                            .map(|v| Value::from(Number::int(v.len() as i64)))))
     } else {
@@ -356,9 +359,9 @@ struct ConsIterator {
 }
 
 impl Iterator for ConsIterator {
-    type Item = Eval<Value>;
+    type Item = EvalRes<Value>;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalRes<Value>> {
         if !self.items.is_empty() { return Some(Ok(self.items.remove(0))) }
         self.inner.next()
     }
@@ -388,9 +391,9 @@ struct ConjIterator {
 }
 
 impl Iterator for ConjIterator {
-    type Item = Eval<Value>;
+    type Item = EvalResult;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalResult> {
         if let Some(ref mut iter) = self.inner.as_mut() {
             if let Some(i) = iter.next() { return Some(i); }
         }

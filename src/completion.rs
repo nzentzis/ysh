@@ -7,6 +7,7 @@ use environment;
 use environment::Environment;
 use data::*;
 use numeric::Number;
+use evaluate::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum EntryType {
@@ -28,7 +29,7 @@ impl ValueConvert for EntryType {
         }
     }
 
-    fn from_obj(val: &Value) -> Eval<Self> {
+    fn from_obj(val: &Value) -> Result<Self, EvalError> {
         let atom = match val.data {
             ValueData::Atom(ref a) => a,
             _ => return Err(EvalError::TypeError(String::from(
@@ -74,29 +75,29 @@ impl ValueConvert for Entry {
                              ("weight", Value::from(Number::int(self.weight as i64)))])
     }
 
-    fn from_obj(v: &Value) -> Eval<Self> {
+    fn from_obj(v: &Value) -> EvalRes<Self> {
         if let ValueData::Map(ref h) = v.data {
-            let typ = h.get(&Value::atom("type").hash().unwrap().unwrap())
+            let typ = h.get(&Value::atom("type").hash().wait().unwrap().unwrap())
                 .ok_or(EvalError::TypeError(format!(
                             "missing required key :type")))?;
-            let text = h.get(&Value::atom("text").hash().unwrap().unwrap())
+            let text = h.get(&Value::atom("text").hash().wait().unwrap().unwrap())
                 .ok_or(EvalError::TypeError(format!(
                             "missing required key :text")))?;
-            let docs = h.get(&Value::atom("docs").hash().unwrap().unwrap())
+            let docs = h.get(&Value::atom("docs").hash().wait().unwrap().unwrap())
                 .ok_or(EvalError::TypeError(format!(
                             "missing required key :docs")))?;
-            let weight = h.get(&Value::atom("weight").hash().unwrap().unwrap())
+            let weight = h.get(&Value::atom("weight").hash().wait().unwrap().unwrap())
                 .ok_or(EvalError::TypeError(format!(
                             "missing required key :weight")))?;
             
             let typ = EntryType::from_obj(typ)?;
-            let text = text.into_str()?;
-            let docs = docs.first()?;
-            let weight = weight.into_num()?
+            let text = text.into_str().wait()?;
+            let docs = docs.first().wait()?;
+            let weight = weight.into_num().wait()?
                 .ok_or(EvalError::TypeError(String::from(
                             "weight must be numeric")))?.round();
 
-            let docs = if let Some(d) = docs {Some(d.into_str()?)}
+            let docs = if let Some(d) = docs {Some(d.into_str().wait()?)}
                        else {None};
 
             Ok(Entry {
@@ -112,15 +113,15 @@ impl ValueConvert for Entry {
     }
 }
 
-fn file_completer(seed: &str) -> Eval<Vec<Entry>> {
+fn file_completer(seed: &str) -> EvalRes<Vec<Entry>> {
     use std::os::unix::prelude::PermissionsExt;
 
     let paths = if let Some(p) = environment::global().get("path") {p}
                 else {return Ok(Vec::new())};
-    let paths = paths.into_seq()?
+    let paths = paths.into_seq().wait()?
                      .into_iter()
-                     .map(|x| x.into_str())
-                     .collect::<Eval<Vec<String>>>()?;
+                     .map(|x| x.into_str().wait())
+                     .collect::<EvalRes<Vec<String>>>()?;
     
     // TODO: handle resolution by path, e.g. "/usr/bin/abc<TAB>"
     //       this might be handled by the file completer.
@@ -200,24 +201,21 @@ fn default_completer(seed: &str, entries: HashSet<EntryType>) -> Vec<Entry> {
 }
 
 /// Wraps the default completer in a Lisp-compatible form
-fn default_complete_wrapper(_: &Environment, args: &[Value]) -> Eval<Value> {
+fn default_complete_wrapper(_: &Environment, args: &[Value]) -> EvalRes<Value> {
     if args.len() != 2 {
-        return Err(EvalError::Arity {
-            got: args.len(),
-            expected: 2
-        });
+        Err(EvalError::Arity {got: args.len(), expected: 2})
+    } else {
+        let seed = args[0].into_str().wait()?;
+        let types = args[1].into_seq().wait()?
+                           .into_iter()
+                           .map(|x| EntryType::from_obj(&x))
+                           .collect::<EvalRes<Vec<_>>>()?;
+
+        let res = default_completer(&seed, HashSet::from_iter(types))
+                 .into_iter()
+                 .map(|x| x.into_obj());
+        Ok(Value::list(res))
     }
-
-    let seed = args[0].into_str()?;
-    let types = args[1].into_seq()?
-                       .into_iter()
-                       .map(|x| EntryType::from_obj(&x))
-                       .collect::<Eval<Vec<_>>>()?;
-
-    let res = default_completer(&seed, HashSet::from_iter(types))
-             .into_iter()
-             .map(|x| x.into_obj());
-    Ok(Value::list(res))
 }
 
 /// Look up the active completion function in `shell/generate-completions` and
@@ -226,13 +224,15 @@ fn run_completer(seed: &str, entries: HashSet<EntryType>) -> Vec<Entry> {
     let results = environment::run_fn(&"shell/generate-completions",
                                       &[Value::str(seed), Value::list(
                                           entries.iter()
-                                                 .map(|x| x.into_obj()))]);
+                                                 .map(|x| x.into_obj()))])
+                 .map(|x| x.wait());
 
     if let Some(Ok(r)) = results {
         let l = r.into_seq()
+                 .wait()
                  .and_then(|s| s.into_iter()
                                 .map(|x| Entry::from_obj(&x))
-                                .collect::<Eval<Vec<_>>>());
+                                .collect::<Result<Vec<_>, _>>());
         if let Ok(r) = l { return r; }
     }
 

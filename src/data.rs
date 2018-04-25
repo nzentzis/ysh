@@ -4,52 +4,10 @@ use std::boxed::Box;
 use std::collections::HashMap;
 
 use environment::Environment;
-use numeric::*;
 use stream::{StreamWrapper, StreamError};
-
-#[derive(Clone)]
-pub enum Executable {
-    /// Native function which acts like an interpreted one
-    /// 
-    /// Arguments will be evaluated *prior* to running the function. The
-    /// function accepts a reference to the lexical environment at call time.
-    Native(Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
-
-    /// Interpreted function
-    /// 
-    /// The inner function accepts a reference to the stored environment
-    Interpreted(Environment, Arc<Fn(&Environment, &[Value]) -> EvalResult + Send + Sync>),
-
-    /// Native implementation of a core form
-    /// 
-    /// Similar to the `Native` type, but arguments are not evaluated prior to
-    /// running it. The function accepts a reference to the lexical environment
-    /// at call time.
-    CoreFn(fn(&Environment, &[Value]) -> EvalResult),
-}
-
-impl Executable {
-    pub fn native<F>(f: F) -> Self
-        where F: Fn(&Environment, &[Value]) -> EvalResult + Send + Sync + 'static {
-        Executable::Native(Arc::new(f))
-    }
-
-    pub fn run(&self, lexical: &Environment, args: &[Value]) -> EvalResult {
-        match self {
-            &Executable::Native(ref f) => {
-                let vals: Result<Vec<_>, EvalError> =
-                    args.iter().map(|x| x.evaluate(lexical)).collect();
-                f(lexical, vals?.as_slice())
-            },
-            &Executable::CoreFn(ref f) => f(lexical, args),
-            &Executable::Interpreted(ref env, ref f) => {
-                let vals: Result<Vec<_>, EvalError> =
-                    args.iter().map(|x| x.evaluate(lexical)).collect();
-                f(env, vals?.as_slice())
-            }
-        }
-    }
-}
+use numeric::*;
+use evaluate::*;
+pub use evaluate::Eval;
 
 /// Trait for types which can be converted to/from values
 pub trait ValueConvert : Sized {
@@ -59,12 +17,11 @@ pub trait ValueConvert : Sized {
     /// Try to convert a value back into the object
     ///
     /// The output of `into_obj` must be accepted by this function.
-    fn from_obj(val: &Value) -> Eval<Self>;
+    fn from_obj(val: &Value) -> EvalRes<Self>;
 }
 
 pub type ValueIteratorBox = Box<Iterator<Item=EvalResult>+Send+Sync>;
-pub type EvalResult = Result<Value, EvalError>;
-pub type Eval<T> = Result<T, EvalError>;
+pub type EvalResult = EvalRes<Value>;
 
 #[derive(Debug)]
 /// An type representing the errors which can occur when evaluating a form
@@ -137,25 +94,28 @@ pub trait ValueLike : Send + Sync {
     /// Get the value's symbol (if applicable)
     /// 
     /// This should *not* perform any conversions -- just return existing data
-    fn get_symbol(&self) -> Eval<Option<Identifier>> { Ok(None) }
+    fn get_symbol(&self) -> Eval<Option<Identifier>> { Eval::from(Ok(None)) }
 
     /// Get the value's string (if applicable)
     /// 
     /// Like `get_symbol`, this shouldn't do any conversions
-    fn get_string(&self) -> Eval<Option<String>> { Ok(None) }
+    fn get_string(&self) -> Eval<Option<String>> { Eval::from(Ok(None)) }
 
     /// Try converting into a `StreamWrapper` with the given parameters
     ///
     /// The `r` and `w` parameters control whether the stream should be opened
     /// in read or write mode.
     fn into_raw_stream(&self, r: bool, w: bool) -> Eval<StreamWrapper> {
-        Err(EvalError::TypeError(String::from("cannot convert object into stream")))
+        Eval::from(Err(EvalError::TypeError(
+                    String::from("cannot convert object into stream"))))
     }
 
     /// Convert into a sequential form
     /// 
     /// This must be equivalent to calling `self.into_iter().collect()`
-    fn into_seq(&self) -> Eval<Vec<Value>> { self.into_iter().collect() }
+    fn into_seq(&self) -> Eval<Vec<Value>> {
+        Eval::from(self.into_iter().collect::<Result<_, _>>())
+    }
 
     /// Generate an iterator over the element's values
     /// 
@@ -177,20 +137,21 @@ pub trait ValueLike : Send + Sync {
     fn into_repr(&self) -> Eval<String> { self.into_str() }
 
     /// Convert a value into numeric form
-    fn into_num(&self) -> Eval<Option<Number>> { Ok(None) }
+    fn into_num(&self) -> Eval<Option<Number>> { Eval::from(Ok(None)) }
 
     /// Check whether a value is truth-like
-    fn into_bool(&self) -> Eval<bool> { Ok(true) }
+    fn into_bool(&self) -> Eval<bool> { Eval::from(Ok(true)) }
 
     /// Convert into a vector of strings usable as command-line arguments
     fn into_args(&self) -> Eval<Vec<String>> {
-        self.into_seq()?
-            .into_iter()
-            .map(|x| x.into_str()).collect()
+        Eval::from(self.into_seq().wait()
+                   .and_then(|s| s.into_iter()
+                                  .map(|x| x.into_str().wait())
+                                  .collect()))
     }
 
     /// Evaluate this value-like object in a given lexical environment
-    fn evaluate(&self, env: &Environment) -> EvalResult;
+    fn evaluate(&self, env: &Environment) -> Eval<Value>;
 
     /// Whether the value can be executed with arguments
     fn is_executable(&self) -> bool { false }
@@ -199,8 +160,8 @@ pub trait ValueLike : Send + Sync {
     /// 
     /// If the value is not executable, return Err() with the original
     /// arguments.
-    fn execute(&self, _env: &Environment, _args: &[Value]) -> EvalResult {
-        Err(EvalError::InvalidOperation("execution not supported"))
+    fn execute(&self, _env: &Environment, _args: &[Value]) -> Eval<Value> {
+        Eval::from(Err(EvalError::InvalidOperation("execution not supported")))
     }
 
     /// Get the first element of the object's sequential form
@@ -405,7 +366,7 @@ impl Value {
             data: ValueData::Atom(Arc::new(String::from(s.as_ref()))),
             name: None,
             doc: None
-        }.hash().unwrap().unwrap()
+        }.hash().wait().unwrap().unwrap()
     }
 
     /// Build a hashmap
@@ -418,19 +379,25 @@ impl Value {
             where S: AsRef<str>,
                   I: IntoIterator<Item=(S, Value)> {
         Value::map(i.into_iter()
-                    .map(|(s,v)| (Value::atom(s).hash().unwrap().unwrap(), v)))
+                    .map(|(s,v)| (Value::atom(s).hash().wait()
+                                        .unwrap().unwrap(), v)))
     }
 
     /// Perform macro expansion on the contained form
-    pub fn macroexpand(self) -> EvalResult {
+    pub fn macroexpand(self) -> Eval<Value> {
         match self.data {
             ValueData::List(ref xs) => {
                 let macro_expr: Option<Value> =
                     if let Some(f) = xs.first() {
                         if f.is_macro() { Some(f.to_owned()) }
-                        else { f.get_symbol()?
-                                .and_then(|sym|
-                                          ::environment::global().get(&*(sym.0))) }
+                        else {
+                            let r = match f.get_symbol().wait() {
+                                Ok(x) => x,
+                                Err(e) => return Eval::from(Err(e))
+                            };
+                            r.and_then(|sym|
+                                       ::environment::global().get(&*(sym.0)))
+                        }
                     } else { None };
                 let macro_expr =
                     if let Some(m) = macro_expr {
@@ -442,14 +409,21 @@ impl Value {
 
                 // check the first element to see if we can resolve it
                 if let Some(exec) = macro_expr {
-                    let body = self.into_seq()?;
-                    let r = exec.run(&::environment::empty(), &body[1..])?;
+                    let body = match self.into_seq().wait() {
+                        Ok(x) => x,
+                        Err(e) => return Eval::from(Err(e))
+                    };
+                    let r = match exec.run(&::environment::empty(), &body[1..])
+                                      .wait() {
+                        Ok(x) => x,
+                        Err(e) => return Eval::from(Err(e))
+                    };
                     return r.macroexpand();
                 }
             },
             _ => {}
         }
-        Ok(self)
+        Eval::from(Ok(self))
     }
 
     /// Check whether the value is a macro
@@ -471,27 +445,29 @@ impl Value {
             &ValueData::Map(ref x) => {
                 for (ref k, ref v) in x {
                     k.hash(&mut hasher);
-                    match v.hash()? {
-                        Some(v) => v.hash(&mut hasher),
-                        None => return Ok(None)
-                    }
+                    match v.hash().wait() {
+                        Ok(Some(v)) => v.hash(&mut hasher),
+                        Ok(None) => return Eval::from(Ok(None)),
+                        Err(e) => return Eval::from(Err(e))
+                    };
                 }
             },
             &ValueData::List(ref x) => {
                 for i in x {
-                    match i.hash()? {
-                        Some(v) => v.hash(&mut hasher),
-                        None => return Ok(None)
-                    }
+                    match i.hash().wait() {
+                        Ok(Some(v)) => v.hash(&mut hasher),
+                        Ok(None) => return Eval::from(Ok(None)),
+                        Err(e) => return Eval::from(Err(e))
+                    };
                 }
             },
-            _ => return Ok(None)
+            _ => return Eval::from(Ok(None))
         }
 
-        Ok(Some(ValueHash {
+        Eval::from(Ok(Some(ValueHash {
             hash: hasher.finish(),
             val: self.to_owned()
-        }))
+        })))
     }
 }
 
@@ -501,38 +477,38 @@ pub trait ToValueHash {
 
 impl ToValueHash for bool {
     fn to_value_hash(self) -> ValueHash {
-        Value::from(self).hash().unwrap().unwrap()
+        Value::from(self).hash().wait().unwrap().unwrap()
     }
 }
 
 impl ToValueHash for Number {
     fn to_value_hash(self) -> ValueHash {
-        Value::from(self).hash().unwrap().unwrap()
+        Value::from(self).hash().wait().unwrap().unwrap()
     }
 }
 
 impl<'a> ToValueHash for &'a str {
     fn to_value_hash(self) -> ValueHash {
-        Value::str(self).hash().unwrap().unwrap()
+        Value::str(self).hash().wait().unwrap().unwrap()
     }
 }
 
 impl<'a> ToValueHash for &'a String {
     fn to_value_hash(self) -> ValueHash {
-        Value::str(self.as_ref()).hash().unwrap().unwrap()
+        Value::str(self.as_ref()).hash().wait().unwrap().unwrap()
     }
 }
 
 impl ToValueHash for Identifier {
     fn to_value_hash(self) -> ValueHash {
-        Value::from(self).hash().unwrap().unwrap()
+        Value::from(self).hash().wait().unwrap().unwrap()
     }
 }
 
 impl<V: ToValueHash> ToValueHash for Vec<V> {
     fn to_value_hash(self) -> ValueHash {
         Value::list(self.into_iter().map(|x| x.to_value_hash().val))
-              .hash().unwrap().unwrap()
+              .hash().wait().unwrap().unwrap()
     }
 }
 
@@ -588,16 +564,23 @@ impl From<ValueData> for Value {
 
 impl ValueLike for Value {
     fn get_symbol(&self) -> Eval<Option<Identifier>> {
-        if let ValueData::Symbol(ref id) = self.data { Ok(Some(id.to_owned())) }
-        else if let ValueData::Polymorphic(ref p) = self.data { p.get_symbol() }
-        else { Ok(None) }
+        if let ValueData::Symbol(ref id) = self.data {
+            Eval::from(Ok(Some(id.to_owned())))
+        } else if let ValueData::Polymorphic(ref p) = self.data {
+            p.get_symbol()
+        } else { Eval::from(Ok(None)) }
     }
 
     fn get_string(&self) -> Eval<Option<String>> {
-        if let &ValueData::Symbol(ref id) = &self.data { Ok(Some((&*id.0).to_owned())) }
-        else if let &ValueData::Str(ref s) = &self.data { Ok(Some(s.to_owned())) }
-        else if let &ValueData::Polymorphic(ref p) = &self.data { p.get_string() }
-        else { Ok(None) }
+        if let &ValueData::Symbol(ref id) = &self.data {
+            Eval::from(Ok(Some((&*id.0).to_owned())))
+        } else if let &ValueData::Str(ref s) = &self.data {
+            Eval::from(Ok(Some(s.to_owned())))
+        } else if let &ValueData::Polymorphic(ref p) = &self.data {
+            p.get_string()
+        } else {
+            Eval::from(Ok(None))
+        }
     }
 
     fn into_raw_stream(&self, r: bool, w: bool) -> Eval<StreamWrapper> {
@@ -609,37 +592,40 @@ impl ValueLike for Value {
             &ValueData::RawStream(ref s) => {
                 // make sure the permissions are compatible
                 if (r & s.is_readable() != r) || (w & s.is_writable() != w) {
-                    return Err(EvalError::TypeError(String::from(
-                                "incompatible stream capabilities")));
+                    return Eval::from(Err(EvalError::TypeError(String::from(
+                                "incompatible stream capabilities"))));
                 } else {
-                    return Ok(s.to_owned());
+                    return Eval::from(Ok(s.to_owned()));
                 }
             },
             &ValueData::Str(ref s) => s.to_owned(),
             &ValueData::Symbol(ref id) => id.as_ref().to_owned(),
             &ValueData::Atom(ref id) => id.as_ref().to_owned(),
-            _ => return Err(EvalError::TypeError(String::from(
-                        "cannot convert type to raw stream")))
+            _ => return Eval::from(Err(EvalError::TypeError(String::from(
+                        "cannot convert type to raw stream"))))
         };
 
         // try opening the file
         use std::fs::OpenOptions;
-        let f = OpenOptions::new().read(r).write(w).create(w).open(fname)?;
-        match (r,w) {
+        let f = match OpenOptions::new().read(r).write(w).create(w).open(fname) {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(EvalError::from(e)))
+        };
+        Eval::from(match (r,w) {
             (true,false) => Ok(StreamWrapper::new_read(f)),
             (false,true) => Ok(StreamWrapper::new_write(f)),
             (true,true) => Ok(StreamWrapper::new_rw(f)),
             _ => unreachable!()
-        }
+        })
     }
 
     fn into_seq(&self) -> Eval<Vec<Value>> {
         if let &ValueData::List(ref l) = &self.data {
-            Ok(l.to_owned())
+            Eval::from(Ok(l.to_owned()))
         } else if let &ValueData::Polymorphic(ref p) = &self.data {
             p.into_seq()
         } else {
-            Ok(vec![self.to_owned()])
+            Eval::from(Ok(vec![self.to_owned()]))
         }
     }
 
@@ -656,44 +642,59 @@ impl ValueLike for Value {
 
     fn into_str(&self) -> Eval<String> {
         match &self.data {
-            &ValueData::Boolean(true)       => Ok(String::from("true")),
-            &ValueData::Boolean(false)      => Ok(String::from("false")),
-            &ValueData::Number(ref n)       => Ok(format!("{}", n)),
-            &ValueData::Str(ref s)          => Ok(s.to_owned()),
-            &ValueData::Symbol(ref id)      => Ok((*(id.0)).to_owned()),
-            &ValueData::Atom(ref a)         => Ok(format!(":{}", a)),
+            &ValueData::Boolean(true)       => Eval::from(Ok(String::from("true"))),
+            &ValueData::Boolean(false)      => Eval::from(Ok(String::from("false"))),
+            &ValueData::Number(ref n)       => Eval::from(Ok(format!("{}", n))),
+            &ValueData::Str(ref s)          => Eval::from(Ok(s.to_owned())),
+            &ValueData::Symbol(ref id)      => Eval::from(Ok((*(id.0)).to_owned())),
+            &ValueData::Atom(ref a)         => Eval::from(Ok(format!(":{}", a))),
             &ValueData::Map(ref m) => {
                 let mut items = Vec::new();
                 for (k,v) in m {
-                    items.push(k.val.into_repr()?);
-                    items.push(v.into_repr()?);
+                    let a = k.val.into_repr().wait();
+                    let a = match a {
+                        Err(e) => return Eval::from(Err(e)),
+                        Ok(x) => x,
+                    };
+                    let b = v.into_repr().wait();
+                    let b = match b {
+                        Err(e) => return Eval::from(Err(e)),
+                        Ok(x) => x,
+                    };
+                    items.push(a);
+                    items.push(b);
                 }
 
                 let mut s = String::with_capacity(128);
                 s.push('{');
                 s.push_str(&items.join(" "));
                 s.push('}');
-                Ok(s)
+                Eval::from(Ok(s))
             },
             &ValueData::List(ref l)         => {
                 let mut s = String::with_capacity(128);
                 s.push('(');
-                let xs: Vec<_> = l.into_iter()
-                                  .map(|x| x.into_str())
-                                  .collect::<Eval<Vec<_>>>()?;
+                let xs = l.into_iter()
+                          .map(|x| x.into_str())
+                          .collect::<Eval<Vec<_>>>()
+                          .wait();
+                let xs = match xs {
+                    Err(e) => return Eval::from(Err(e)),
+                    Ok(r)  => r,
+                };
                 s.push_str(&xs.join(" "));
                 s.push(')');
-                Ok(s)
+                Eval::from(Ok(s))
             },
-            &ValueData::Function(_)         => Ok(match &self.name {
+            &ValueData::Function(_)         => Eval::from(Ok(match &self.name {
                 &None        => String::from("<anonymous fn>"),
                 &Some(ref s) => format!("<fn '{}'>", s.as_ref()),
-            }),
-            &ValueData::Macro(_)            => Ok(String::from("<macro>")),
+            })),
+            &ValueData::Macro(_)            => Eval::from(Ok(String::from("<macro>"))),
             &ValueData::RawStream(ref s) => {
                 // TODO: use a more meaningful representation. maybe add to the
                 //       stream API?
-                Ok(String::from("<raw stream object>"))
+                Eval::from(Ok(String::from("<raw stream object>")))
             }
             &ValueData::Polymorphic(ref v)  => v.into_str()
         }
@@ -701,81 +702,89 @@ impl ValueLike for Value {
 
     fn into_repr(&self) -> Eval<String> {
         match &self.data {
-            &ValueData::Str(ref s) => Ok(format!("\"{}\"", s)),
+            &ValueData::Str(ref s) => Eval::from(Ok(format!("\"{}\"", s))),
             _ => self.into_str()
         }
     }
 
     fn into_num(&self) -> Eval<Option<Number>> {
         if let &ValueData::Number(ref n) = &self.data {
-            Ok(Some(n.to_owned()))
+            Eval::from(Ok(Some(n.to_owned())))
         } else if let &ValueData::Polymorphic(ref p) = &self.data {
             p.into_num()
         } else {
-            Ok(None)
+            Eval::from(Ok(None))
         }
     }
 
     fn into_bool(&self) -> Eval<bool> {
         match &self.data {
-            &ValueData::Boolean(b)          => Ok(b),
-            &ValueData::Number(ref n)       => Ok(n.round() != 0),
-            &ValueData::Str(ref s)          => Ok(!s.is_empty()),
-            &ValueData::Symbol(_)           => Ok(true),
-            &ValueData::Atom(_)             => Ok(true),
-            &ValueData::Map(ref m)          => Ok(!m.is_empty()),
-            &ValueData::List(ref l) => Ok(
-                if l.is_empty() { false }
-                else { l.iter().map(|x| x.into_bool())
-                                         .collect::<Eval<Vec<bool>>>()?
-                                         .into_iter()
-                                         .any(|x| x) }),
-            &ValueData::Function(_)         => Ok(true),
-            &ValueData::Macro(_)            => Ok(true),
-            &ValueData::RawStream(_)        => Ok(true),
+            &ValueData::Boolean(b)          => Eval::from(Ok(b)),
+            &ValueData::Number(ref n)       => Eval::from(Ok(n.round() != 0)),
+            &ValueData::Str(ref s)          => Eval::from(Ok(!s.is_empty())),
+            &ValueData::Symbol(_)           => Eval::from(Ok(true)),
+            &ValueData::Atom(_)             => Eval::from(Ok(true)),
+            &ValueData::Map(ref m)          => Eval::from(Ok(!m.is_empty())),
+            &ValueData::List(ref l) =>
+                if l.is_empty() { Eval::from(Ok(false)) } else {
+                    let obj = l.iter().map(|x| x.into_bool())
+                               .collect::<Eval<Vec<bool>>>().wait();
+                    Eval::from(obj.map(|x| x.into_iter().any(|x| x)))
+                },
+            &ValueData::Function(_)         => Eval::from(Ok(true)),
+            &ValueData::Macro(_)            => Eval::from(Ok(true)),
+            &ValueData::RawStream(_)        => Eval::from(Ok(true)),
             &ValueData::Polymorphic(ref v)  => v.into_bool()
         }
     }
 
     fn into_args(&self) -> Eval<Vec<String>> {
         match &self.data {
-            &ValueData::List(ref l) => l.into_iter()
-                                         .map(|x| x.into_args())
-                                         .collect::<Eval<Vec<_>>>()
-                                         .map(|r| r.into_iter()
-                                                   .flat_map(|x| x)
-                                                   .collect()),
-            _ => self.into_str().map(|r| vec![r])
+            &ValueData::List(ref l) =>
+                Eval::from(l.into_iter()
+                            .map(|x| x.into_args())
+                            .collect::<Eval<Vec<_>>>().wait()
+                            .map(|r| r.into_iter()
+                                      .flat_map(|x| x)
+                                      .collect())),
+            _ => Eval::from(self.into_str().wait().map(|r| vec![r]))
         }
     }
 
-    fn evaluate(&self, env: &Environment) -> EvalResult {
+    fn evaluate(&self, env: &Environment) -> Eval<Value> {
         match &self.data {
             &ValueData::Symbol(ref s) => {
                 // try looking it up
-                if let Some(v) = env.get(&*(s.0)) {
+                Eval::from(if let Some(v) = env.get(&*(s.0)) {
                     Ok(v)
                 } else {
                     Ok(self.clone())
-                }
+                })
             },
             &ValueData::List(ref xs) => {
                 // evaluate () as ()
-                if xs.is_empty() { return Ok(Value::list(vec![])); }
-                let first = xs[0].evaluate(env)?;
+                if xs.is_empty() { return Eval::from(Ok(Value::list(vec![]))); }
+                let first = match xs[0].evaluate(env).wait() {
+                    Ok(r) => r,
+                    Err(e) => return Eval::from(Err(e))
+                };
 
                 if first.is_executable() {
                     first.execute(env, &xs[1..])
                 } else {
                     // evaluate elements when using bare list
-                    let xs: Vec<_> = xs.into_iter()
-                                       .map(|v| v.evaluate(env))
-                                       .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Value::list(xs))
+                    let xs = xs.into_iter()
+                               .map(|v| v.evaluate(env).wait())
+                               .collect::<Result<Vec<_>, _>>();
+                    let xs = match xs {
+                        Ok(r) => r,
+                        Err(e) => return Eval::from(Err(e))
+                    };
+                    Eval::from(Ok(Value::list(xs)))
                 }
             },
             &ValueData::Polymorphic(ref p) => p.evaluate(env),
-            _ => Ok(self.to_owned())
+            _ => Eval::from(Ok(self.to_owned()))
         }
     }
 
@@ -787,22 +796,23 @@ impl ValueLike for Value {
         }
     }
 
-    fn execute(&self, env: &Environment, args: &[Value]) -> EvalResult {
+    fn execute(&self, env: &Environment, args: &[Value]) -> Eval<Value> {
         match &self.data {
             // TODO: force evaluate args in outer environment
             // delegate to inner evaluation function
             &ValueData::Function(ref f) => f.run(env, args),
             &ValueData::Macro(_)        => panic!("illegal attempt to execute macro"),
             &ValueData::Polymorphic(ref v) => v.execute(env, args),
-            x => Err(EvalError::TypeError(format!("object '{:?}' is not executable", x))),
+            x => Eval::from(Err(EvalError::TypeError(
+                        format!("object '{:?}' is not executable", x)))),
         }
     }
 
     fn first(&self) -> Eval<Option<Value>> {
         match &self.data {
-            &ValueData::List(ref v)        => Ok(v.first().map(|x| x.clone())),
+            &ValueData::List(ref v)        => Eval::from(Ok(v.first().map(|x| x.clone()))),
             &ValueData::Polymorphic(ref v) => v.first(),
-            _                              => Ok(Some(self.clone()))
+            _                              => Eval::from(Ok(Some(self.clone())))
         }
     }
 }
@@ -825,16 +835,16 @@ impl PartialEq for Value {
     }
 }
 
-struct LazySequenceIterator<I> where I: Iterator<Item=Eval<Value>>+Send+Sync {
+struct LazySequenceIterator<I> where I: Iterator<Item=EvalResult>+Send+Sync {
     item_offset: usize, // offset into items of current element
     items: Arc<Mutex<Vec<Value>>>,
     rest: Arc<Mutex<I>>
 }
 
-impl<I: Iterator<Item=Eval<Value>>+Send+Sync> Iterator for LazySequenceIterator<I> {
-    type Item = Eval<Value>;
+impl<I: Iterator<Item=EvalResult>+Send+Sync> Iterator for LazySequenceIterator<I> {
+    type Item = EvalResult;
 
-    fn next(&mut self) -> Option<Eval<Value>> {
+    fn next(&mut self) -> Option<EvalResult> {
         let mut items = self.items.lock().unwrap();
         if self.item_offset < items.len() {
             let r = items[self.item_offset].clone();
@@ -855,7 +865,7 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync> Iterator for LazySequenceIterator<
                 // add to the item vec
                 items.push(itm.clone());
                 self.item_offset += 1;
-                return Some(Ok(itm))
+                Some(Ok(itm))
             }
         }
     }
@@ -864,13 +874,13 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync> Iterator for LazySequenceIterator<
 /// Utility type for converting lazy iterators into sequence types
 /// 
 /// Note that this assumes the given iterator ends when `next` returns `None`.
-pub struct LazySequence<I> where I: Iterator<Item=Eval<Value>>+Send+Sync {
+pub struct LazySequence<I> where I: Iterator<Item=EvalRes<Value>>+Send+Sync {
     // always lock `items` first if locking both
     items: Arc<Mutex<Vec<Value>>>,
     rest: Arc<Mutex<I>>
 }
 
-impl<I: Iterator<Item=Eval<Value>>+Send+Sync> LazySequence<I> {
+impl<I: Iterator<Item=EvalResult>+Send+Sync> LazySequence<I> {
     pub fn new(iter: I) -> Self {
         LazySequence {
             items: Arc::new(Mutex::new(Vec::new())),
@@ -879,7 +889,7 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync> LazySequence<I> {
     }
 }
 
-impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence<I> {
+impl<I: Iterator<Item=EvalResult>+Send+Sync+'static> ValueLike for LazySequence<I> {
     fn into_iter(&self) -> ValueIteratorBox {
         Box::new(LazySequenceIterator {
             item_offset: 0,
@@ -891,21 +901,35 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
     fn into_str(&self) -> Eval<String> {
         let mut s = String::new();
         s.push('(');
-        let body: Vec<_> = self.into_iter()
-                               .map(|x| x.and_then(|x| x.into_str()))
-                               .collect::<Eval<Vec<_>>>()?;
+        let body = self.into_iter()
+                       .map(|x| x.and_then(|x| x.into_str().wait()))
+                       .collect::<EvalRes<Vec<_>>>();
+        let body = match body {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
         s.push_str(&body.join(" "));
         s.push(')');
 
-        Ok(s)
+        Eval::from(Ok(s))
     }
 
-    fn evaluate(&self, env: &Environment) -> EvalResult {
+    fn evaluate(&self, env: &Environment) -> Eval<Value> {
         // evaluate first so iterators act like lists
-        if let Some(first) = self.first()? {
-            let first = first.evaluate(env)?;
+        let first = match self.first().wait() {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
+        if let Some(first) = first {
+            let first = match first.evaluate(env).wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
             if first.is_executable() {
-                let s = self.into_iter().collect::<Eval<Vec<_>>>()?;
+                let s = match self.into_iter().collect::<EvalRes<Vec<_>>>() {
+                    Ok(r) => r,
+                    Err(e) => return Eval::from(Err(e))
+                };
                 return first.execute(env, &s[1..]);
             }
         }
@@ -916,8 +940,8 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
                 item_offset: 0,
                 items: Arc::clone(&self.items),
                 rest: Arc::clone(&self.rest),
-            }.map(move |i| i.and_then(|x| x.evaluate(&env))));
-        Ok(Value::new(LazySequence::new(iter)))
+            }.map(move |i| i.and_then(|x| x.evaluate(&env).wait())));
+        Eval::from(Ok(Value::new(LazySequence::new(iter))))
     }
 
     fn first(&self) -> Eval<Option<Value>> {
@@ -926,15 +950,18 @@ impl<I: Iterator<Item=Eval<Value>>+Send+Sync+'static> ValueLike for LazySequence
             // try to pull more
             let mut itr = self.rest.lock().unwrap();
             match itr.next() {
-                None => return Ok(None),
+                None => return Eval::from(Ok(None)),
                 Some(itm) => {
-                    let itm = itm?;
+                    let itm = match itm {
+                        Ok(r) => r,
+                        Err(e) => return Eval::from(Err(e))
+                    };
                     itms.push(itm);
-                    return Ok(itms.first().map(|x| x.clone()))
+                    return Eval::from(Ok(itms.first().map(|x| x.clone())))
                 }
             }
         } else {
-            Ok(itms.first().map(|x| x.clone()))
+            Eval::from(Ok(itms.first().map(|x| x.clone())))
         }
     }
 }
@@ -957,7 +984,7 @@ impl fmt::Debug for ValueData {
     }
 }
 
-impl<I: Iterator<Item=Eval<Value>>+Send+Sync> Clone for LazySequence<I> {
+impl<I: Iterator<Item=EvalRes<Value>>+Send+Sync> Clone for LazySequence<I> {
     fn clone(&self) -> Self {
         LazySequence {
             items: Arc::clone(&self.items),
@@ -1051,7 +1078,7 @@ pub struct PipelineComponent {
 impl PipelineComponent {
     pub fn into_repr(&self) -> String {
         let mut s = self.xform.0.iter()
-                        .map(|x| x.into_repr().unwrap())
+                        .map(|x| x.into_repr().wait().unwrap())
                         .collect::<Vec<_>>()
                         .join(" ");
         match self.link {

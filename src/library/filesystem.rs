@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use environment::*;
 use data::*;
+use evaluate::*;
 
 extern crate glob;
 
@@ -14,9 +15,9 @@ extern crate glob;
 ///             thing as the 1-arg form.
 fn fn_glob(_: &Environment, args: &[Value]) -> EvalResult {
     if args.len() == 1 {
-        let items = args[0].into_seq()?;
-        let items = items.into_iter().map(|x| x.into_str())
-                         .collect::<Eval<Vec<_>>>()?;
+        let items = args[0].into_seq().wait()?;
+        let items = items.into_iter().map(|x| x.into_str().wait())
+                         .collect::<EvalRes<Vec<_>>>()?;
         let globbed = items.into_iter()
                            .map(|i| glob::glob(&i)
                              .map(|itr| itr.collect::<Result<Vec<_>,

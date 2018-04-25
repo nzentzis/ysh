@@ -22,7 +22,7 @@ fn run_string(s: &'static str) {
             Err(e) => if let ParseError::UnexpectedEOF = e {break;}
                       else {panic!("Failed to parse Lisp core library")}
         };
-        m.evaluate(&mut env)
+        m.evaluate(&mut env).wait()
          .expect("Failed to evaluated Lisp core library form");
     }
 }

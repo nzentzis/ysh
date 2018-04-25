@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use environment::*;
 use data::*;
+use evaluate::*;
 
 lazy_static! {
     static ref DOC_IF: Documentation = Documentation::new()
@@ -69,26 +70,34 @@ semantics as 'do'.");
 
 /// if the first arg is truthy, evaluate and yield the second arg. Otherwise,
 /// yield the third arg if present and () otherwise
-fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_if(lex: &Environment, args: &[Value]) -> Eval<Value> {
     if args.len() == 2 {
-        let pred = args[0].evaluate(lex).and_then(|x| x.into_bool())?;
+        let pred = match args[0].evaluate(lex).wait()
+                                .and_then(|x| x.into_bool().wait()) {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
         if pred {
             args[1].evaluate(lex)
         } else {
-            Ok(Value::empty())
+            Eval::from(Ok(Value::empty()))
         }
     } else if args.len() == 3 {
-        let pred = args[0].evaluate(lex).and_then(|x| x.into_bool())?;
+        let pred = match args[0].evaluate(lex).wait()
+                                .and_then(|x| x.into_bool().wait()) {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
         if pred {
             args[1].evaluate(lex)
         } else {
             args[2].evaluate(lex)
         }
     } else {
-        Err(EvalError::Arity {
+        Eval::from(Err(EvalError::Arity {
             expected: 3,
             got: args.len()
-        })
+        }))
     }
 }
 
@@ -96,20 +105,34 @@ fn core_if(lex: &Environment, args: &[Value]) -> EvalResult {
 /// 
 /// If no value is specified, this will retrieve the given symbol from the
 /// global environment or () if not present.
-fn core_def(lex: &Environment, args: &[Value]) -> EvalResult {
-    if args.len() == 1 {
-        if let Some(ident) = args[0].get_symbol()? {
+fn core_def(lex: &Environment, args: &[Value]) -> Eval<Value> {
+    Eval::from(if args.len() == 1 {
+        let sym = match args[0].get_symbol().wait() {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
+        if let Some(ident) = sym {
             Ok(global().get(ident).unwrap_or_else(|| Value::empty()))
         } else {
             Err(EvalError::TypeError(
                     format!("argument to def cannot be converted to a symbol")))
         }
     } else if args.len() == 2 {
-        let sym = args[0].get_symbol()?.ok_or(EvalError::TypeError(
+        let sym = match args[0].get_symbol().wait() {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
+        let sym = sym.ok_or(EvalError::TypeError(
                 format!("argument to def cannot be converted to a symbol")));
-        let sym = sym?;
+        let sym = match sym {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
 
-        let body = args[1].evaluate(lex)?;
+        let body = match args[1].evaluate(lex).wait() {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
 
         global().set(sym, body);
         Ok(Value::empty())
@@ -118,19 +141,28 @@ fn core_def(lex: &Environment, args: &[Value]) -> EvalResult {
             expected: 2,
             got: args.len()
         })
-    }
+    })
 }
 
 /// Evaluate the argument forms in the order in which they were given
 /// 
 /// Return the output of the last argument form, or () if no arguments were
 /// given.
-fn core_do(lex: &Environment, args: &[Value]) -> EvalResult {
-    let mut r = Value::empty();
-    for i in args.iter() {
-        r = i.evaluate(lex)?;
+fn core_do(lex: &Environment, args: &[Value]) -> Eval<Value> {
+    if args.len() >= 1 {
+        let mut r = Value::empty();
+        for i in args[..args.len()-1].into_iter() {
+            r = match i.evaluate(lex).wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
+        }
+
+        // tail call optimization
+        args[args.len()-1].evaluate(lex)
+    } else {
+        Eval::from(Ok(Value::empty()))
     }
-    Ok(r)
 }
 
 /// Evaluate the inner expressions a modified lexical environment
@@ -140,26 +172,40 @@ fn core_do(lex: &Environment, args: &[Value]) -> EvalResult {
 /// using the same semantics as `do`, but with the given bindings applied.
 /// 
 /// Note that earlier bindings will apply to the value forms for later bindings.
-fn core_let(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_let(lex: &Environment, args: &[Value]) -> Eval<Value> {
     if args.len() == 0 {
-        return Err(EvalError::Arity {
+        return Eval::from(Err(EvalError::Arity {
             got: 0,
             expected: 1
-        });
+        }));
     }
 
     // evaluate bindings
-    let bind_list = args[0].into_seq()?;
+    let bind_list = match args[0].into_seq().wait() {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
     if bind_list.len() % 2 != 0 {
-        return Err(EvalError::InvalidOperation(
-                "binding list for let has odd length"));
+        return Eval::from(Err(EvalError::InvalidOperation(
+                "binding list for let has odd length")));
     }
 
     let mut e = lex.clone();
     for c in bind_list.chunks(2) {
-        let sym = c[0].get_symbol()?.ok_or(EvalError::TypeError(format!(
-                    "first argument in let binding cannot be converted to symbol")))?;
-        let val = c[1].evaluate(&e)?;
+        let sym = match c[0].get_symbol().wait() {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
+        let sym = sym.ok_or(EvalError::TypeError(format!(
+                    "first argument in let binding cannot be converted to symbol")));
+        let sym = match sym {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
+        let val = match c[1].evaluate(&e).wait() {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
         e.exclusive().set(sym, val);
     }
 
@@ -197,7 +243,7 @@ fn core_let(lex: &Environment, args: &[Value]) -> EvalResult {
 /// `rest` and `?` patterns may be mixed, but the matcher will give priority to
 /// arguments which come first. All arguments must be consumed for a pattern to
 /// match.
-fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_fn(lex: &Environment, args: &[Value]) -> Eval<Value> {
     enum PatternPiece {
         Required(Identifier),
         Optional(Identifier),
@@ -205,19 +251,19 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
     }
 
     if args.len() == 1 {
-        return Err(EvalError::Arity {
+        return Eval::from(Err(EvalError::Arity {
             got: args.len(),
             expected: 2
-        });
+        }));
     }
 
-    fn make_pattern(v: &Value) -> Eval<Vec<PatternPiece>> {
+    fn make_pattern(v: &Value) -> EvalRes<Vec<PatternPiece>> {
         let mut r = Vec::new();
         let mut next_is_rest = false;
         let mut should_end = false;
         for i in v.into_iter() {
             let i = i?;
-            let s = i.get_symbol()?
+            let s = i.get_symbol().wait()?
                      .ok_or(EvalError::TypeError(
                              format!("pattern element cannot be converted to symbol")))?;
             if s.as_ref() == "&" {
@@ -288,29 +334,43 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
     // it's single form if the first element of the first arg isn't a list
     // since no valid bindings are lists, and multi-form if it *is* a list
     let is_single_form = if let Some(x) = args[0].into_iter().next() {
-            if let &ValueData::List(_) = &x?.data { false }
-            else { true } }
-        else { true };
+        let x = match x {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
+        if let &ValueData::List(_) = &x.data { false }
+        else { true }
+    } else { true };
 
     // build list of forms and patterns
     let mut variants: Vec<(Vec<PatternPiece>, Vec<Value>)> = Vec::new();
     if is_single_form {
-        let pat = make_pattern(&args[0])?;
+        let pat = match make_pattern(&args[0]) {
+            Ok(r) => r,
+            Err(e) => return Eval::from(Err(e))
+        };
         let vals: Vec<_> = args[1..].iter().cloned().collect();
         variants.push((pat, vals));
     } else {
         for l in args.iter() {
-            let l = l.into_seq()?;
+            let l = match l.into_seq().wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
             if l.is_empty() {
-                return Err(EvalError::InvalidOperation("empty fn variant spec"));
+                return Eval::from(Err
+                    (EvalError::InvalidOperation("empty fn variant spec")));
             }
-            let pat = make_pattern(&l[0])?;
+            let pat = match make_pattern(&l[0]) {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
             let body: Vec<_> = l.into_iter().skip(1).collect();
             variants.push((pat, body));
         }
     }
 
-    Ok(Value::from(Executable::Interpreted(lex.to_owned(),
+    Eval::from(Ok(Value::from(Executable::Interpreted(lex.to_owned(),
         Arc::new(move |env, args| {
             // try matching each pattern
             for &(ref pat, ref body) in variants.iter() {
@@ -325,22 +385,22 @@ fn core_fn(lex: &Environment, args: &[Value]) -> EvalResult {
                     continue;
                 }
             }
-            Err(EvalError::Arity {
+            Eval::from(Err(EvalError::Arity {
                 got: args.len(),
                 expected: variants[0].0.len()
-            })
-        }))))
+            }))
+        })))))
 }
 
 /// Return the literal arguments without interpretation or substitution
 /// 
 /// With one argument, return its quoted form. Otherwise, wrap its args in a
 /// list.
-fn core_quote(_: &Environment, args: &[Value]) -> EvalResult {
+fn core_quote(_: &Environment, args: &[Value]) -> Eval<Value> {
     if args.len() == 1 {
-        Ok(args[0].to_owned())
+        Eval::from(Ok(args[0].to_owned()))
     } else {
-        Ok(Value::list(args.iter().cloned()))
+        Eval::from(Ok(Value::list(args.iter().cloned())))
     }
 }
 
@@ -349,31 +409,44 @@ fn core_quote(_: &Environment, args: &[Value]) -> EvalResult {
 /// 
 /// This operates like to `defn`, but the constructed function is stored as a
 /// macro rather than as a normal function.
-fn core_defmacro(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_defmacro(lex: &Environment, args: &[Value]) -> Eval<Value> {
     if args.len() < 1 {
-        return Err(EvalError::Arity { got: 0, expected: 3 });
+        return Eval::from(Err(EvalError::Arity { got: 0, expected: 3 }));
     }
 
     // convert the function into a macro
-    let mut m = core_fn(lex, &args[1..])?;
+    let mut m = match core_fn(lex, &args[1..]).wait() {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
     let d = if let ValueData::Function(e) = m.data.clone() { e }
             else { panic!("invalid value result from fn call") };
     m.data = ValueData::Macro(d);
 
-    let name = args[0].get_symbol()?.ok_or(EvalError::TypeError(
+    let name = match args[0].get_symbol().wait() {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
+    let name = name.ok_or(EvalError::TypeError(
             format!("argument to def cannot be converted to a symbol")));
-    let name = name?;
+    let name = match name {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
 
     global().set(name, m);
-    Ok(Value::empty())
+    Eval::from(Ok(Value::empty()))
 }
 
 /// Perform macro expansion on the passed form
-fn core_macroexpand(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_macroexpand(lex: &Environment, args: &[Value]) -> Eval<Value> {
     if args.len() != 1 {
-        Err(EvalError::Arity { got: args.len(), expected: 1})
+        Eval::from(Err(EvalError::Arity { got: args.len(), expected: 1}))
     } else {
-        args[0].evaluate(lex)?.macroexpand()
+        match args[0].evaluate(lex).wait() {
+            Ok(r) => r.macroexpand(),
+            Err(e) => Eval::from(Err(e))
+        }
     }
 }
 
@@ -383,7 +456,7 @@ fn core_eval(lex: &Environment, args: &[Value]) -> EvalResult {
     if args.len() != 1 {
         Err(EvalError::Arity { got: args.len(), expected: 1})
     } else {
-        args[0].evaluate(lex)
+        args[0].evaluate(lex).wait()
     }
 }
 
@@ -391,12 +464,15 @@ fn core_eval(lex: &Environment, args: &[Value]) -> EvalResult {
 /// 
 /// The first argument is interpreted as in `def`, and the remainder are
 /// interpreted as arguments to `fn`.
-fn core_defn(lex: &Environment, args: &[Value]) -> EvalResult {
+fn core_defn(lex: &Environment, args: &[Value]) -> Eval<Value> {
     if args.len() < 1 {
-        return Err(EvalError::Arity { got: 0, expected: 3 });
+        return Eval::from(Err(EvalError::Arity { got: 0, expected: 3 }));
     }
 
-    let v = core_fn(lex, &args[1..])?;
+    let v = match core_fn(lex, &args[1..]).wait() {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
     let name = args[0].clone();
     core_def(lex, &[name, v])
 }
@@ -422,7 +498,7 @@ fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
         if let Some(ref d) = x.doc {
             render_doc(d);
             return Ok(Value::empty());
-        } else if let Some(id) = x.get_symbol()? {
+        } else if let Some(id) = x.get_symbol().wait()? {
             // try looking up the symbol to check docs for its value
             if let Some(ref d) = env.get(id).and_then(|o| o.doc) {
                 render_doc(d);
@@ -458,11 +534,11 @@ pub fn fn_source(env: &Environment, args: &[Value]) -> EvalResult {
     use ::reader::ParseError;
 
     for a in args.iter() {
-        let f = a.into_raw_stream(true, false)?;
+        let f = a.into_raw_stream(true, false).wait()?;
         loop {
             let m = ::reader::read(&f);
             match m.result {
-                Ok(r) => {r.evaluate(env)?;},
+                Ok(r) => {r.evaluate(env).wait()?;},
                 Err(e) => if let ParseError::UnexpectedEOF = e {break;}
                           else {return Err(EvalError::Runtime(
                                       format!("read error: {}", e)));}
@@ -529,27 +605,27 @@ mod test {
         let n1 = Value::from(Number::int(1));
         let n2 = Value::from(Number::int(2));
 
-        assert_eq!(core_if(&e, &[t.clone(), n1.clone()]).unwrap(), n1);
-        assert_eq!(core_if(&e, &[f.clone(), n1.clone()]).unwrap(),
+        assert_eq!(core_if(&e, &[t.clone(), n1.clone()]).wait().unwrap(), n1);
+        assert_eq!(core_if(&e, &[f.clone(), n1.clone()]).wait().unwrap(),
                    Value::empty());
-        assert_eq!(core_if(&e, &[t.clone(), n1.clone(), n2.clone()]).unwrap(), n1);
-        assert_eq!(core_if(&e, &[f.clone(), n1.clone(), n2.clone()]).unwrap(), n2);
-        assert!(core_if(&e, &[]).is_err());
+        assert_eq!(core_if(&e, &[t.clone(), n1.clone(), n2.clone()]).wait().unwrap(), n1);
+        assert_eq!(core_if(&e, &[f.clone(), n1.clone(), n2.clone()]).wait().unwrap(), n2);
+        assert!(core_if(&e, &[]).wait().is_err());
     }
 
     #[test]
     fn test_def() {
         let e = empty();
         let test_sym = Value::from(Identifier::new("def_test_sym"));
-        assert!(core_def(&e, &[]).is_err());
-        assert!(core_def(&e, &[Value::from(true)]).is_err());
-        assert!(core_def(&e, &[Value::from(true), Value::from(true)]).is_err());
+        assert!(core_def(&e, &[]).wait().is_err());
+        assert!(core_def(&e, &[Value::from(true)]).wait().is_err());
+        assert!(core_def(&e, &[Value::from(true), Value::from(true)]).wait().is_err());
         assert!(global().get("def_test_sym").is_none());
-        assert_eq!(core_def(&e, &[test_sym.clone()]).unwrap(), Value::empty());
-        assert_eq!(core_def(&e, &[test_sym.clone(), Value::from(true)]).unwrap(),
+        assert_eq!(core_def(&e, &[test_sym.clone()]).wait().unwrap(), Value::empty());
+        assert_eq!(core_def(&e, &[test_sym.clone(), Value::from(true)]).wait().unwrap(),
                    Value::empty());
         assert_eq!(global().get("def_test_sym"), Some(Value::from(true)));
-        assert_eq!(core_def(&e, &[test_sym.clone()]).unwrap(),
+        assert_eq!(core_def(&e, &[test_sym.clone()]).wait().unwrap(),
                    Value::from(true));
     }
 
@@ -557,10 +633,10 @@ mod test {
     fn test_let() {
         let e = empty();
         let test_sym = Value::from(Identifier::new("let_test_sym"));
-        assert_eq!(test_sym.evaluate(&e).unwrap(), test_sym);
+        assert_eq!(test_sym.evaluate(&e).wait().unwrap(), test_sym);
         assert_eq!(core_let(&e, &[Value::list(vec![test_sym.clone(),
                                                    Value::from(true)]),
-                                  test_sym]).unwrap(), Value::from(true));
+                                  test_sym]).wait().unwrap(), Value::from(true));
     }
 
     #[test]
@@ -570,24 +646,26 @@ mod test {
         // single-variant tests
         let f1 = core_fn(&e, &[Value::list(vec![
                                            Value::from(Identifier::new("a"))]),
-                               Value::from(Identifier::new("a"))]).unwrap();
-        assert_eq!(f1.execute(&e, &[Value::from(true)]).unwrap(), Value::from(true));
-        assert!(f1.execute(&e, &[]).is_err());
+                               Value::from(Identifier::new("a"))]).wait().unwrap();
+        assert_eq!(f1.execute(&e, &[Value::from(true)]).wait().unwrap(),
+                    Value::from(true));
+        assert!(f1.execute(&e, &[]).wait().is_err());
 
         let f2 = core_fn(&e, &[Value::list(vec![
                                            Value::from(Identifier::new("a")),
                                            Value::from(Identifier::new("?"))]),
-                               Value::from(Identifier::new("a"))]).unwrap();
-        assert_eq!(f2.execute(&e, &[Value::from(true)]).unwrap(), Value::from(true));
-        assert_eq!(f2.execute(&e, &[]).unwrap(), Value::empty());
+                               Value::from(Identifier::new("a"))]).wait().unwrap();
+        assert_eq!(f2.execute(&e, &[Value::from(true)]).wait().unwrap(),
+                    Value::from(true));
+        assert_eq!(f2.execute(&e, &[]).wait().unwrap(), Value::empty());
 
         let f3 = core_fn(&e, &[Value::list(vec![
                                            Value::from(Identifier::new("&")),
                                            Value::from(Identifier::new("rest"))]),
-                               Value::from(Identifier::new("rest"))]).unwrap();
-        assert_eq!(f3.execute(&e, &[Value::from(true)]).unwrap(),
+                               Value::from(Identifier::new("rest"))]).wait().unwrap();
+        assert_eq!(f3.execute(&e, &[Value::from(true)]).wait().unwrap(),
                    Value::list(vec![Value::from(true)]));
-        assert_eq!(f3.execute(&e, &[]).unwrap(), Value::empty());
+        assert_eq!(f3.execute(&e, &[]).wait().unwrap(), Value::empty());
 
         // multivariant test
         let f4 = core_fn(&e, &[
@@ -598,13 +676,13 @@ mod test {
                              Value::from(Identifier::new("a"))]),
             Value::list(vec![Value::list(vec![Value::from(Identifier::new("&")),
                                               Value::from(Identifier::new("rest"))]),
-                             Value::from(Identifier::new("rest"))])]).unwrap();
+                             Value::from(Identifier::new("rest"))])]).wait().unwrap();
 
-        assert_eq!(f4.execute(&e, &[]).unwrap(), Value::empty());
-        assert_eq!(f4.execute(&e, &[Value::from(true)]).unwrap(),
+        assert_eq!(f4.execute(&e, &[]).wait().unwrap(), Value::empty());
+        assert_eq!(f4.execute(&e, &[Value::from(true)]).wait().unwrap(),
                    Value::from(true));
         assert_eq!(f4.execute(&e, &[Value::from(true),
-                                    Value::from(false)]).unwrap(),
+                                    Value::from(false)]).wait().unwrap(),
                    Value::list(vec![Value::from(true), Value::from(false)]));
     }
 }

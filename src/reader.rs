@@ -4,9 +4,12 @@ use std::io;
 use std::sync::RwLock;
 use std::collections::HashMap;
 
+use futures::*;
+
 use data::*;
 use numeric::*;
 use stream::{CharStream, ReadWrapper, StreamError};
+use evaluate::*;
 
 lazy_static! {
     // read table
@@ -88,6 +91,7 @@ impl From<StreamError> for ParseError {
 
 pub type Parse<T> = Result<T, ParseError>;
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum ParseContext {
     /// String contents, starting with the given partial contents
     StringContent(String),
@@ -770,7 +774,7 @@ fn internal_read<R: CharStream>(peek: &R, conf: ReadOptions) -> ParseOutput<Valu
                     if let Some(k) = s.take() {
                         m.insert(k, res);
                     } else {
-                        let h = match res.hash() {
+                        let h = match res.hash().wait() {
                             Ok(r) => r,
                             Err(e) => return ParseOutput::err(
                                 ParseContext::Other, ParseError::from(e))
@@ -944,7 +948,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                           else { return ParseOutput::err(
                                   ParseContext::Value,
                                   ParseError::UnexpectedEOF) };
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::generic_err(ParseError::from(e))
                 };
@@ -974,7 +978,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                     return ParseOutput::ok(ParseContext::Value, pipeline);
                 };
 
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::Value,
                                                       ParseError::from(e))
@@ -1012,7 +1016,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                 let tok = if let Some(tok) = tok { tok }
                           else { return ParseOutput::generic_err(
                                   ParseError::UnexpectedEOF) };
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::Other,
                                                       ParseError::from(e))
@@ -1040,12 +1044,12 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                                   ParseError::UnexpectedEOF) };
                 
                 // evaluate the token and try converting to a string
-                let res = match tok.evaluate(&::environment::empty()) {
+                let res = match tok.evaluate(&::environment::empty()).wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::File,
                                                       ParseError::from(e))
                 };
-                let t = match res.into_str() {
+                let t = match res.into_str().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::File,
                                                       ParseError::from(e))
@@ -1062,12 +1066,12 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                                   ParseError::UnexpectedEOF) };
                 
                 // evaluate the token and try converting to a string
-                let res = match tok.evaluate(&::environment::empty()) {
+                let res = match tok.evaluate(&::environment::empty()).wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::File,
                                                       ParseError::from(e))
                 };
-                let t = match res.into_str() {
+                let t = match res.into_str().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::File,
                                                       ParseError::from(e))
@@ -1083,7 +1087,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                                   ParseContext::Symbol(String::from("")),
                                   ParseError::UnexpectedEOF) };
                 
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(
                         ParseContext::Symbol(String::from("")),
@@ -1108,7 +1112,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                           else { return ParseOutput::err(
                                   ParseContext::Symbol(String::from("")),
                                   ParseError::UnexpectedEOF) };
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(
                         ParseContext::Symbol(String::from("")),
@@ -1136,12 +1140,12 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                                   ParseError::UnexpectedEOF) };
                 
                 // evaluate the token and try converting to a string
-                let res = match tok.evaluate(&::environment::empty()) {
+                let res = match tok.evaluate(&::environment::empty()).wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::File,
                                                       ParseError::from(e))
                 };
-                let t = match res.into_str() {
+                let t = match res.into_str().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::File,
                                                       ParseError::from(e))
@@ -1157,7 +1161,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                                   ParseContext::Symbol(String::from("")),
                                   ParseError::UnexpectedEOF) };
                 
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(
                         ParseContext::Symbol(String::from("")),
@@ -1180,7 +1184,7 @@ pub fn read_pipeline<R: CharStream>(strm: &mut R) -> ParseOutput<Pipeline> {
                           else { return ParseOutput::ok(ParseContext::Other,
                                                         pipeline); };
 
-                let sym = match tok.get_symbol() {
+                let sym = match tok.get_symbol().wait() {
                     Ok(r) => r,
                     Err(e) => return ParseOutput::err(ParseContext::Other,
                                                       ParseError::from(e))
@@ -1247,6 +1251,7 @@ mod test {
             (&b"14"[..], Number::int(14)),
             (&b"027"[..], Number::int(27)),
 
+            (&b".2"[..], Number::real(0.2)),
             (&b"0.2"[..], Number::real(0.2)),
             (&b"-0.2"[..], Number::real(-0.2)),
             (&b"+0.2"[..], Number::real(0.2)),
@@ -1258,18 +1263,43 @@ mod test {
             (&b"1/2"[..], Number::rational(1, 2)),
             (&b"-1/2"[..], Number::rational(-1, 2)),
             (&b"-02/7"[..], Number::rational(-2, 7)),
+            (&b"2/17"[..], Number::rational(2, 17)),
 
+            (&b".1+3i"[..], Number::complex(0.1, 3.)),
             (&b"0+2i"[..], Number::complex(0.,2.)),
             (&b"1-2i"[..], Number::complex(1.,-2.)),
+            (&b"1-.2i"[..], Number::complex(1.,-0.2)),
             (&b"+1+2i"[..], Number::complex(1.,2.)),
             (&b"+1.27e-0+2i"[..], Number::complex(1.27,2.)),
             (&b"+1.27e-0+2.2i"[..], Number::complex(1.27,2.2)),
             (&b"+1.27e-0+2.2e-1i"[..], Number::complex(1.27,0.22)),
         ];
 
+        let fail_cases = vec![
+            &b"q"[..],
+            &b".q"[..],
+            &b"2eq"[..],
+            &b"2e-q"[..],
+            &b"1/c"[..],
+            &b"17+q"[..],
+        ];
+
         for (i,o) in cases {
             let r = read_number(&mut ReadWrapper::new(&mut Cursor::new(i)));
             assert_eq!(r.unwrap(), o);
+
+            let r = parse_number(i);
+            assert_eq!(r.result.unwrap(), o);
+            assert_eq!(r.context, ParseContext::Other);
+        }
+
+        for i in fail_cases {
+            let r = read_number(&mut ReadWrapper::new(&mut Cursor::new(i)));
+            assert!(r.is_err());
+
+            let r = parse_number(i);
+            assert!(r.result.is_err());
+            assert_eq!(r.context, ParseContext::Other);
         }
     }
 
@@ -1284,7 +1314,12 @@ mod test {
             let r = read_identifier(
                 &mut ReadWrapper::new(&mut Cursor::new(&i[..])));
             assert_eq!(r.result.unwrap(), Identifier::new(o));
+            assert_eq!(r.context, ParseContext::Symbol(String::from(o)));
         }
+
+        let r = read_identifier(&mut ReadWrapper::new(&mut Cursor::new(&b""[..])));
+        assert!(r.result.is_err());
+        assert_eq!(r.context, ParseContext::Symbol(String::from("")));
     }
 
     #[test]
@@ -1319,13 +1354,59 @@ mod test {
                     Value::from(Identifier::new("$1")),
                     Value::from(Identifier::new("$3"))])])),
             (&b"'2"[..], Value::list(vec![Value::from(Identifier::new("quote")),
-                                          Value::from(Number::int(2))]))
+                                          Value::from(Number::int(2))])),
+            (&b":foo"[..], Value::atom("foo")),
+            (&b"{:test :foo :foo :test}"[..], Value::atom_map(vec![
+                ("test", Value::atom("foo")),
+                ("foo", Value::atom("test")) ])),
         ];
 
         for (i,o) in cases {
             let r = internal_read(
                 &mut ReadWrapper::new(&mut Cursor::new(&i[..])),
                 ReadOptions::default());
+            assert_eq!(r.result.unwrap(), o);
+        }
+    }
+
+    #[test]
+    fn form_autoclose() {
+        let cases = vec![
+            (&b"(1 2"[..], Value::list(vec![Value::from(Number::int(1)),
+                                             Value::from(Number::int(2))])),
+            (&b"(true false"[..], Value::list(vec![Value::from(true), Value::from(false)])),
+            (&b"$(+ x $"[..], Value::list(vec![
+                Value::from(Identifier::new("fn")),
+                Value::list(vec![Value::from(Identifier::new("$"))]),
+                Value::list(vec![
+                    Value::from(Identifier::new("+")),
+                    Value::from(Identifier::new("x")),
+                    Value::from(Identifier::new("$"))])])),
+            (&b"$(+ $1    $3"[..], Value::list(vec![
+                Value::from(Identifier::new("fn")),
+                Value::list(vec![Value::from(Identifier::new("$1")),
+                                 Value::from(Identifier::new("$2")),
+                                 Value::from(Identifier::new("$3"))]),
+                Value::list(vec![
+                    Value::from(Identifier::new("+")),
+                    Value::from(Identifier::new("$1")),
+                    Value::from(Identifier::new("$3"))])])),
+            (&b"{:test :foo :foo :test"[..], Value::atom_map(vec![
+                ("test", Value::atom("foo")),
+                ("foo", Value::atom("test")) ])),
+            (&b"{:test :foo :foo (1 2"[..], Value::atom_map(vec![
+                ("foo", Value::list(vec![Value::from(Number::int(1)),
+                                          Value::from(Number::int(2))])),
+                ("test", Value::atom("foo")) ])),
+        ];
+
+        for (i,o) in cases {
+            let r = internal_read(
+                &mut ReadWrapper::new(&mut Cursor::new(&i[..])),
+                ReadOptions {
+                    autoclose: true,
+                    newlines: false
+                });
             assert_eq!(r.result.unwrap(), o);
         }
     }
