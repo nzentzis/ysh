@@ -59,6 +59,19 @@ semantics as 'do'.");
                stores it in the first symbol. Function creation works as with \
                `fn` and definition works as with `def`.");
 
+    static ref DOC_DEFMACRO: Documentation = Documentation::new()
+        .form(&["sym", "(args*)", "body*"])
+        .form(&["sym", "((args0*) body0*)", "((args1*) body1*)", "..."])
+        .short("Creates a function and stores it as a macro in the global namespace")
+        .desc("Operates identically to `defn`, but the created function is \
+               stored as a macro instead of as a regular function.");
+
+    static ref DOC_MACROEXPAND: Documentation = Documentation::new()
+        .form(&["form"])
+        .short("Perform macro expansion on the input form")
+        .desc("Evaluate macros in the input form and return a form with their \
+              results");
+
     static ref DOC_SOURCE: Documentation = Documentation::new()
         .form(&["filelike", "filelike*"])
         .short("Read and execute code from files or streams")
@@ -66,6 +79,18 @@ semantics as 'do'.");
                in the process if necessary) and repeatedly read forms from \
                them using the normal Lisp reader, evaluating each form as it \
                is read. Passed forms are sourced in order.");
+
+    static ref DOC_EVAL: Documentation = Documentation::new()
+        .form(&["form"])
+        .short("Evaluate the passed form as code");
+
+    static ref DOC_MAN: Documentation = Documentation::new()
+        .form(&["form"])
+        //.form(&["args*"])
+        .short("Look up, format, and display documentation for an item")
+        .desc("If the passed form has documentation, render and display it. If \
+               it's a symbol but has no documentation itself, look up the symbol \
+               and display the documentation of the value it refers to.");
 }
 
 /// if the first arg is truthy, evaluate and yield the second arg. Otherwise,
@@ -569,14 +594,18 @@ pub fn initialize() {
     // macros and quoting
     env.set_immut("quote", Value::from(Executable::CoreFn(core_quote))
                                      .document(&DOC_QUOTE));
-    env.set_immut("defmacro", Value::from(Executable::CoreFn(core_defmacro)));
-    env.set_immut("macroexpand", Value::from(Executable::CoreFn(core_macroexpand)));
+    env.set_immut("defmacro", Value::from(Executable::CoreFn(core_defmacro))
+                                    .document(&DOC_DEFMACRO));
+    env.set_immut("macroexpand", Value::from(Executable::CoreFn(core_macroexpand))
+                                .document(&DOC_MACROEXPAND));
 
     // utilities
     env.set("defn", Value::from(Executable::CoreFn(core_defn))
                           .document(&DOC_DEFN));
-    env.set("eval", Value::from(Executable::native(core_eval)));
-    env.set("doc", Value::from(Executable::native(fn_man)));
+    env.set("eval", Value::from(Executable::native(core_eval))
+                          .document(&DOC_EVAL));
+    env.set("doc", Value::from(Executable::native(fn_man))
+                         .document(&DOC_MAN));
     env.set("source", Value::from(Executable::native(fn_source))
                             .document(&DOC_SOURCE));
 }
