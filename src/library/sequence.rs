@@ -46,6 +46,58 @@ lazy_static! {
                return a list of N-th elements. If the given element isn't\
                there, then either return () or omit it from the output\
                sequence.");
+    static ref DOC_CONS: Documentation = Documentation::new()
+        .form(&["seq", "item*"])
+        .short("Prepend one or more items to a sequence")
+        .desc("Accepts a sequence and some items, and produces a new lazy \
+               sequence with the provided items prepended to the input \
+               sequence.");
+    static ref DOC_CONJ: Documentation = Documentation::new()
+        .form(&["seq", "item*"])
+        .short("Append one or more items to a sequence")
+        .desc("Accepts a sequence and some items, and produces a new lazy \
+               sequence with the provided items appended to the input \
+               sequence.");
+    static ref DOC_CONCAT: Documentation = Documentation::new()
+        .form(&["seq*"])
+        .short("Concatenate one or more sequences")
+        .desc("Return a lazy sequence which is the concatenation of all input \
+               sequences.");
+
+    static ref DOC_REDUCE: Documentation = Documentation::new()
+        .form(&["fn", "seed"])
+        .form(&["fn", "seed", "seq"])
+        .form(&["fn", "seed", "seq0", "seq1", "seq2", "..."])
+        .short("Left-reduce a sequence using a provided function")
+        .desc("Performs reduction: computing the result of applying f to a seed \
+               and the first element in a sequence, then applying f to the \
+               result and the second item in the sequence, and so on until all \
+               elements of the sequence are exhausted.\n\n\
+
+               With two arguments, build a transformer that reduces input \
+               sequences using the provided seed and function. With three args, \
+               reduce the input sequence as described. With more than three \
+               arguments, zip the input sequences and use the result as \
+               arguments to the reduction function.\n\n\
+               
+               For example:\n\
+               $ reduce cons () (1 2 3) (4 5 6)\n\
+               (1 4 2 5 3 6)");
+
+    static ref DOC_FILTER: Documentation = Documentation::new()
+        .form(&["fn"])
+        .form(&["fn", "seq*"])
+        .short("Return elements of a sequence for which a function returns true")
+        .desc("Performs filtering: retaining only the elements of a sequence \
+               for which the given function returns a truthy value.\n\n\
+               
+               With one argument, build a sequence transformer which filters \
+               using the provided function. With two or more arguments, filter \
+               the concatenation of the sequences using the provided function \
+               and return the result.\n\n\
+               
+               This function produces a lazy sequence; filtering is performed \
+               as needed.");
 }
 
 struct MapIterator {
@@ -425,8 +477,10 @@ pub fn initialize() {
     // higher-order stuff
     env.set("map", Value::from(Executable::native(fn_map))
                   .document(&DOC_MAP));
-    env.set("reduce", Value::from(Executable::native(fn_reduce)));
-    env.set("filter", Value::from(Executable::native(fn_filter)));
+    env.set("reduce", Value::from(Executable::native(fn_reduce))
+                     .document(&DOC_REDUCE));
+    env.set("filter", Value::from(Executable::native(fn_filter))
+                     .document(&DOC_FILTER));
 
     // queries
     env.set("length", Value::from(Executable::native(fn_length))
@@ -443,9 +497,12 @@ pub fn initialize() {
                   .document(&DOC_FIRST));
 
     // list-list ops
-    env.set("concat", Value::from(Executable::native(fn_concat)));
+    env.set("concat", Value::from(Executable::native(fn_concat))
+                     .document(&DOC_CONCAT));
 
     // list-item ops
-    env.set("cons", Value::from(Executable::native(fn_cons)));
-    env.set("conj", Value::from(Executable::native(fn_conj)));
+    env.set("cons", Value::from(Executable::native(fn_cons))
+                   .document(&DOC_CONS));
+    env.set("conj", Value::from(Executable::native(fn_conj))
+                   .document(&DOC_CONJ));
 }
