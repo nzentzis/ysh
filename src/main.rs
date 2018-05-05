@@ -29,7 +29,8 @@ mod completion;
 // runtime control and management
 #[allow(dead_code)] mod jobs;
 mod evaluate;
-#[allow(dead_code)] mod pipeline;
+mod planner;
+mod pipeline;
 mod history;
 
 use std::process::exit;
@@ -39,7 +40,8 @@ use nix::unistd;
 use nix::sys::signal;
 
 use environment::{Environment, global};
-use pipeline::{Plan, PlanningError};
+use planner::{Plan, PlanningError};
+use pipeline::ActivePipeline;
 use data::{Value, ValueLike, EvalResult, Eval};
 use evaluate::Executable;
 
@@ -292,7 +294,7 @@ fn main() {
 
         history::db().record(&cmd);
 
-        let plan = match Plan::plan_for(cmd) {
+        let plan = match Plan::build(cmd) {
             Ok(r) => r,
             Err(e) => {
                 match e {
@@ -300,16 +302,16 @@ fn main() {
                         eprintln!("ysh: failed to plan job: too many inputs"),
                     PlanningError::MultipleOutputs =>
                         eprintln!("ysh: failed to plan job: too many outputs"),
+                    PlanningError::Evaluation(e) =>
+                        eprintln!("ysh: failed to plan job: {}", e),
                     PlanningError::NotFound => {},
-                    PlanningError::FrozenPipeline =>
-                        panic!("unexpected frozen pipeline error")
                 }
                 continue;
             }
         };
-        //println!("\r{:?}", plan);
+        println!("\r{:?}", plan);
 
-        match plan.launch(false) {
+        match pipeline::ActivePipeline::launch(&plan, false) {
             Ok(x) => x.wait(),
             Err(e) => {
                 eprintln!("ysh: pipeline launch error: {:?}", e)
