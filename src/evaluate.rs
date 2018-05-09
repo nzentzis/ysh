@@ -51,6 +51,18 @@ pub enum Executable {
     CoreFn(fn(&Environment, &[Value]) -> Eval<Value>),
 }
 
+impl PartialEq<Executable> for Executable {
+    fn eq(&self, other: &Executable) -> bool {
+        match (self, other) {
+            (&Executable::Native(ref a), &Executable::Native(ref b))
+                => Arc::ptr_eq(a,b),
+            (&Executable::Interpreted(_, ref a),
+             &Executable::Interpreted(_, ref b)) => Arc::ptr_eq(a,b),
+            _ => false
+        }
+    }
+}
+
 impl Executable {
     pub fn native<F>(f: F) -> Self
         where F: Fn(&Environment, &[Value])

@@ -698,6 +698,8 @@ mod test {
         let env = global();
         env.set("fs/glob", Value::from(Executable::native(mock_fs_glob)));
         env.set("shell/locate", Value::from(Executable::native(mock_shell_locate)));
+        env.set("test-symbol", Value::from(Executable::native(
+                    |_,_| Ok(Value::str("testvalue")))));
     }
 
     #[should_panic]
@@ -1000,6 +1002,41 @@ mod test {
                                b"glob2.foo"[..].to_owned(),
                                b"glob3.foo"[..].to_owned()]
                 }, PlanStep::ToStdout]
+            });
+        }
+    }
+
+    #[test]
+    fn planner_adapter() {
+        setup_plan_test_env();
+
+        {
+            let mut p = Planner::new();
+            p.push(PipelineComponent {
+                xform: Transformer(vec![Value::str("command-1"),
+                                        Value::from(Identifier::new("foo"))]),
+                link: Some(PipeMode::Pipe)
+            }).expect("Failed to push pipeline component 1");
+            p.push(PipelineComponent {
+                xform: Transformer(vec![Value::from(Identifier::new("test-symbol"))]),
+                link: None
+            }).expect("Failed to push pipeline component 2");
+
+            // verify that it compiles properly
+            let r = p.compile().expect("Failed to compile plan");
+            assert_eq!(r, Plan {
+                steps: vec![PlanStep::FromStdin,
+                    PlanStep::Command {
+                        exec: PathBuf::from("/test/command-1"),
+                        invoked_name: String::from("command-1"),
+                        args: vec![b"foo"[..].to_owned()]
+                    },
+                    PlanStep::EvalGroup {
+                        in_type: EvalInputType::PolyObject,
+                        out_type: EvalOutputType::PrettyPrint,
+                        body: vec![global().get("test-symbol").unwrap()]
+                    },
+                    PlanStep::ToStdout]
             });
         }
     }

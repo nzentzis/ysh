@@ -829,7 +829,7 @@ impl PartialEq for Value {
             (&ValueData::List(ref x),    &ValueData::List(ref y))   => x == y,
 
             // don't bother comparing functions or wrappers yet
-            (&ValueData::Function(_),    &ValueData::Function(_))   => false,
+            (&ValueData::Function(ref a),&ValueData::Function(ref b))=> a == b,
             _                                                       => false
         }
     }
