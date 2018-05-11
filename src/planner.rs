@@ -358,6 +358,11 @@ impl Planner {
         for elem in self.elems {
             match elem {
                 PlanElement::Expression(val) => {
+                    if eval_group.is_none() {
+                        eval_group = Some((vec![],
+                                           EvalInputType::PolyObject,
+                                           EvalOutputType::IntoStr));
+                    }
                     eval_group.as_mut().unwrap().0.push(val);
                     is_output_object = true;
                 },
@@ -605,7 +610,7 @@ pub enum EvalOutputType {
 impl From<AdapterType> for EvalOutputType {
     fn from(t: AdapterType) -> Self {
         match t {
-            PolyToStream   => EvalOutputType::IntoStr,
+            AdapterType::PolyToStream   => EvalOutputType::IntoStr,
             _ => panic!("nonsense adapter type found")
         }
     }

@@ -2,6 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::os::unix::prelude::*;
 use std::error::Error;
+use std::fs;
 
 use nix::fcntl;
 use nix::unistd;
@@ -10,13 +11,14 @@ use data::*;
 use environment::{global, empty, run_fn};
 use jobs::{Command, Job, IoChannel};
 use stream::*;
-use planner::Plan;
+use planner::{Plan, PlanStep, EvalInputType, EvalOutputType};
 
 /// Errors which can arise from attempting to launch a pipeline
 #[derive(Debug)]
 pub enum LaunchError {
     Evaluation(EvalError),
     JobLaunch(::nix::Error),
+    IO(io::Error),
     Unknown
 }
 
@@ -48,6 +50,14 @@ impl FDWrapper {
 
         r
     }
+
+    fn pipe_pair() -> (FDWrapper, FDWrapper) {
+        let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
+                           .expect("cannot generate pipes");
+        let i = FDWrapper::Pipe(i);
+        let o = FDWrapper::Pipe(o);
+        (i,o)
+    }
 }
 
 impl Drop for FDWrapper {
@@ -66,14 +76,76 @@ impl ActivePipeline {
     pub fn launch(plan: &Plan,
                   background: bool) -> Result<ActivePipeline, LaunchError> {
         // fd of the last output
-        /*
         let mut last_output = None;
 
+        let last_elem = plan.steps().last().unwrap();
+
+        let mut job = Job::new();
         for step in plan.steps() {
             match step {
+                PlanStep::FromStdin => {
+                    last_output = Some(FDWrapper::Stdin)
+                },
+                PlanStep::FromFile(path) => {
+                    let f = fs::File::open(path).map_err(LaunchError::IO)?;
+                    last_output = Some(FDWrapper::Pipe(f.into_raw_fd()));
+                },
+                p @ PlanStep::EvalGroup {..} => {
+                    let (i,o) = FDWrapper::pipe_pair();
+                    TransformEvaluation::launch(&mut job,
+                                                last_output.take(), i, p)?;
+                    last_output = Some(o);
+                },
+                PlanStep::Command {exec, invoked_name, args} => {
+                    // check whether to link the output to stdout
+                    let fwd_stdout = match last_elem {
+                        PlanStep::ToStdout => true,
+                        _                  => false
+                    };
+                    // let fwd_stdout = elems_iter.peek() == Some(&&PlanElement::Stdout);
+
+                    // set up the command
+                    // TODO: redirect or handle stderr
+                    let out_fd = last_output.as_ref().unwrap().as_fd();
+                    let stdin = if last_output == Some(FDWrapper::Stdin) {
+                        IoChannel::Inherited
+                    } else {
+                        IoChannel::Specific(last_output.take().unwrap().into_fd())
+                    };
+                    let cmd = Command::new(exec)
+                        .invoked_using(invoked_name)
+                        .args(args.into_iter()
+                                  .map(|x| ::std::ffi::OsStr::from_bytes(x))
+                                  .collect::<Vec<_>>())
+                        .stdin(stdin)
+                        .stdout(if fwd_stdout {IoChannel::Inherited}
+                                else {IoChannel::Pipe});
+                    let cmd = if background { cmd } else { cmd.foreground() };
+                    
+                    // launch it into the job
+                    let process = match job.launch(cmd) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // retake output FD to avoid leaking it
+                            FDWrapper::Pipe(out_fd);
+                            return Err(LaunchError::JobLaunch(e));
+                        }
+                    };
+
+                    if !fwd_stdout {
+                        last_output = Some(FDWrapper::Pipe(
+                                process.stdout().unwrap().into_raw_fd()));
+                    }
+                },
+                PlanStep::ToStdout => {},
+                PlanStep::ToVar {..} => {},
+                PlanStep::ToFile {..} => {},
             }
         }
 
+        Ok(ActivePipeline { job })
+
+        /*
         // execute all plan elements
         let mut job = Job::new();
         let mut plan_buffer = Vec::with_capacity(self.elems.len());
@@ -233,7 +305,6 @@ impl ActivePipeline {
 
         Ok(ActivePipeline { job })
         */
-        panic!()
     }
 }
 
@@ -242,7 +313,6 @@ enum EvalOutput {
     Descriptor(FDWrapper)
 }
 
-/*
 /// Representation of a transformer evaluation which is running as part of a
 /// pipeline.
 /// 
@@ -254,24 +324,143 @@ struct TransformEvaluation {
 }
 
 impl TransformEvaluation {
-    fn build_innermost_elem(input: FDWrapper, first: PlanElement) -> PolyStream {
-        let config = match first {
-            PlanElement::Adapter(AdapterType::StreamToPoly)   => StreamOptions::new(),
-            PlanElement::Adapter(AdapterType::StreamToString) => StreamOptions::basic(),
-            PlanElement::Adapter(AdapterType::StreamDelim(c)) => {
-                let mut o = StreamOptions::new();
-                o.delimiter(c);
-                o
-            },
-            _ => panic!("unhandled plan element")
+    /// Launch a new transformer evaluation based on a passed `EvalGroup` step
+    ///
+    /// # Panics
+    /// If the step is not an `EvalGroup` or is an invalid (read: empty) group,
+    /// this function will panic.
+    fn launch(job: &mut Job,
+              input: Option<FDWrapper>,
+              output: FDWrapper,
+              step: &PlanStep)
+            -> Result<TransformEvaluation, LaunchError> {
+        use std::io::prelude::*;
+        use terminal;
+
+        let (in_type, out_type, body) =
+            if let PlanStep::EvalGroup {in_type,out_type,body} = step {
+                (in_type, out_type, body)
+            } else {
+                panic!("Tried to launch a non-evalgroup plan step");
+            };
+
+        let mut elements = body.into_iter();
+
+        // build the innermost (first generated) value from the input
+        // since we the pipeline gets built from the inside (left element) out
+        // (toward the right) we need to keep track of the current element at
+        // all times.
+        let mut innermost = {
+            // building the innermost element just means wrapping the stream in
+            // an appropriate adapter
+            //
+            // build the adapter
+            let opts = match in_type {
+                EvalInputType::NoInput => None,
+                EvalInputType::PolyObject => Some(StreamOptions::new()),
+                EvalInputType::StreamDelim(c) => {
+                    let mut o = StreamOptions::new();
+                    o.delimiter(*c);
+                    Some(o)
+                },
+                EvalInputType::StreamString => Some(StreamOptions::basic())
+            };
+
+            // wrap the input stream in it
+            if let Some(input) = input {
+                if let Some(opts) = opts {
+                    Value::new(if input == FDWrapper::Stdin {
+                        PolyStream::from_stdin(opts)
+                                   .expect("Cannot construct input stream")
+                    } else {
+                        PolyStream::from_fd(input.into_fd(), opts)
+                                   .expect("Cannot construct input stream")
+                    })
+                } else {
+                    elements.next().expect("Tried to launch an invalid step")
+                            .to_owned()
+                }
+            } else {
+                if let Some(opts) = opts {
+                    panic!("No input supplied to EvalGroup which requires it")
+                } else {
+                    elements.next().expect("Tried to launch an invalid step")
+                            .to_owned()
+                }
+            }
         };
 
-        if input == FDWrapper::Stdin {
-            PolyStream::from_stdin(config).expect("cannot construct stream")
-        } else {
-            PolyStream::from_fd(input.into_fd(),
-                                config).expect("cannot construct stream")
+        // TODO: support killing active transforms
+        for elem in elements {
+            // turn it into a transform, and update the current innermost form
+            innermost = TransformEvaluation::apply_value_xform(elem.to_owned(),
+                                                               innermost);
         }
+
+        // macroexpand form before evaluating it
+        let expr = innermost.macroexpand().wait()
+                  .map_err(LaunchError::Evaluation)?;
+
+        // launch the transform
+        let out = output;
+        let out_type = out_type.to_owned();
+        job.spawn(move || {
+            // TODO: error handling
+            let res = expr.evaluate(&::environment::empty()).wait();
+            let mut term = terminal::acquire();
+            let res = match res {
+                Ok(r) => r,
+                Err(e) => {
+                    writeln!(term.stderr(), "ysh: {:?} - {}", expr, e).unwrap();
+                    return;
+                }
+            };
+            let _ = term;
+
+            let to_write = match out_type {
+                EvalOutputType::IntoStr => {
+                    match res.into_str().wait() {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let mut term = terminal::acquire();
+                            writeln!(term.stderr(),
+                                     "ysh: cannot convert to string: {}", e)
+                                .unwrap();
+                            return;
+                        }
+                    }
+                },
+                EvalOutputType::PrettyPrint => {
+                    match res.into_str().wait() {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let mut term = terminal::acquire();
+                            writeln!(term.stderr(),
+                                     "ysh: cannot convert to string: {}", e)
+                                .unwrap();
+                            return;
+                        }
+                    }
+                },
+                EvalOutputType::Object => unimplemented!(),
+            };
+
+            match out {
+                FDWrapper::Stdout => {
+                    let mut t = terminal::acquire();
+                    writeln!(t.stdout(), "{}", to_write).unwrap();
+                },
+                FDWrapper::Pipe(fd) => {
+                    let mut f = unsafe {
+                        ::std::fs::File::from_raw_fd(fd)
+                    };
+                    writeln!(f, "{}", to_write).unwrap();
+                },
+                FDWrapper::Stdin => panic!("Cannot output to stdin")
+            }
+        });
+
+        Ok(TransformEvaluation {})
     }
 
     /// Generate a transformed expression from a basic one using the following
@@ -320,93 +509,7 @@ impl TransformEvaluation {
             xform
         }
     }
-
-    fn launch<I>(job: &mut Job,
-                 input: FDWrapper,
-                 elements: I,
-                 output: EvalOutput) -> Option<()>
-            where I: IntoIterator<Item=PlanElement> {
-        use std::io::prelude::*;
-        use terminal;
-
-        let mut elements = elements.into_iter();
-        let first = elements.next().unwrap();
-
-        // build the innermost (first generated) value from the input
-        // since we the pipeline gets built from the inside (left element) out
-        // (toward the right) we need to keep track of the current element at
-        // all times.
-        let mut innermost = Value::new(
-            TransformEvaluation::build_innermost_elem(input, first));
-
-        // TODO: Support for killing active transforms
-        for elem in elements {
-            // turn it into a viable transform
-            innermost = match elem {
-                PlanElement::Expression(v) =>
-                    TransformEvaluation::apply_value_xform(v, innermost),
-                _ => unimplemented!()
-            };
-        }
-
-        // macroexpand the expression before evaluating it
-        let expr = match innermost.macroexpand().wait() {
-            Ok(r) => r,
-            Err(e) => {
-                println!("ysh: runtime error while expanding macro: {}",
-                         e.description());
-                return None;
-            }
-        };
-
-        // launch the transform
-        let out = output;
-        job.spawn(move || {
-            // TODO: error handling
-            let res = expr.evaluate(&::environment::empty()).wait();
-            let mut term = terminal::acquire();
-            let res = match res {
-                Ok(r) => r,
-                Err(e) => {
-                    writeln!(term.stderr(), "ysh: {:?} - {}", expr, e).unwrap();
-                    return;
-                }
-            };
-            match out {
-                EvalOutput::PrettyStdout => {
-                    // don't bother printing if they return null
-                    if res != Value::empty() {
-                        match res.into_str().wait() {
-                            Ok(s) => {
-                                writeln!(term.stdout(), "{}", s).unwrap();
-                            },
-                            Err(e) => {
-                                writeln!(term.stderr(),
-                                    "ysh: cannot convert to string: {}", e)
-                                    .unwrap();
-                            }
-                        }
-                    }
-                },
-                EvalOutput::Descriptor(fd) => {
-                    let mut f = unsafe {
-                        ::std::fs::File::from_raw_fd(fd.into_fd())
-                    };
-                    match res.into_str().wait() {
-                        Ok(r) => {write!(f, "{}", r).unwrap();},
-                        Err(e) => {
-                            writeln!(term.stderr(),
-                                "ysh: cannot convert to string: {}", e)
-                                .unwrap();
-                        }
-                    }
-                }
-            }
-        });
-        Some(())
-    }
 }
-*/
 
 /// Representation of an active pipeline.
 pub struct ActivePipeline {
