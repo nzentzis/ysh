@@ -78,10 +78,9 @@ impl ActivePipeline {
         // fd of the last output
         let mut last_output = None;
 
-        let last_elem = plan.steps().last().unwrap();
-
         let mut job = Job::new();
-        for step in plan.steps() {
+        let mut steps_iter = plan.steps().into_iter().peekable();
+        while let Some(step) = steps_iter.next() {
             match step {
                 PlanStep::FromStdin => {
                     last_output = Some(FDWrapper::Stdin)
@@ -98,11 +97,16 @@ impl ActivePipeline {
                 },
                 PlanStep::Command {exec, invoked_name, args} => {
                     // check whether to link the output to stdout
-                    let fwd_stdout = match last_elem {
-                        PlanStep::ToStdout => true,
-                        _                  => false
+                    let stdout_channel = match steps_iter.peek() {
+                        Some(PlanStep::ToStdout) => Some(IoChannel::Inherited),
+                        Some(PlanStep::ToFile {..}) => {
+                            unimplemented!()
+                        },
+                        Some(PlanStep::ToVar {..}) => {
+                            unimplemented!()
+                        }
+                        _ => None
                     };
-                    // let fwd_stdout = elems_iter.peek() == Some(&&PlanElement::Stdout);
 
                     // set up the command
                     // TODO: redirect or handle stderr
@@ -118,8 +122,7 @@ impl ActivePipeline {
                                   .map(|x| ::std::ffi::OsStr::from_bytes(x))
                                   .collect::<Vec<_>>())
                         .stdin(stdin)
-                        .stdout(if fwd_stdout {IoChannel::Inherited}
-                                else {IoChannel::Pipe});
+                        .stdout(stdout_channel.unwrap_or(IoChannel::Pipe));
                     let cmd = if background { cmd } else { cmd.foreground() };
                     
                     // launch it into the job
@@ -132,7 +135,7 @@ impl ActivePipeline {
                         }
                     };
 
-                    if !fwd_stdout {
+                    if stdout_channel.is_none() {
                         last_output = Some(FDWrapper::Pipe(
                                 process.stdout().unwrap().into_raw_fd()));
                     }
@@ -144,167 +147,6 @@ impl ActivePipeline {
         }
 
         Ok(ActivePipeline { job })
-
-        /*
-        // execute all plan elements
-        let mut job = Job::new();
-        let mut plan_buffer = Vec::with_capacity(self.elems.len());
-        while let Some(element) = elems_iter.next() {
-            match element {
-                &PlanElement::Expression(ref v) =>
-                    plan_buffer.push(PlanElement::Expression(v.to_owned())),
-                &PlanElement::Adapter(ref t) =>
-                    plan_buffer.push(PlanElement::Adapter(*t)),
-                &PlanElement::Command {ref exec, ref invoked_name, ref args} => {
-                    // we have to flush the plan buffer if there's anything
-                    // there
-                    if !plan_buffer.is_empty() {
-                        // generate a pipe
-                        let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
-                                           .expect("cannot generate pipes");
-                        let i = FDWrapper::Pipe(i);
-                        let o = FDWrapper::Pipe(o);
-                        let eval = TransformEvaluation::launch(&mut job,
-                                        last_output.take().unwrap(),
-                                        plan_buffer.drain(..),
-                                        EvalOutput::Descriptor(i));
-
-                        if eval.is_none() {
-                            // handle launch failure
-                            // currently just close FDs and abort
-                            // TODO: specific error code
-                            return Err(LaunchError::Unknown);
-                        }
-                        last_output = Some(o);
-                    }
-
-                    // check whether to link the output to stdout
-                    let fwd_stdout = elems_iter.peek() == Some(&&PlanElement::Stdout);
-
-                    // evaluate args
-                    let args = args.into_iter()
-                                   .map(|a| a.evaluate(&empty()))
-                                   .collect::<Eval<Vec<_>>>().wait()
-                                   .and_then(|a|
-                                         a.into_iter()
-                                          .map(|x| match &x.data {
-                                              // don't expand fns or macros
-                                              &ValueData::Function(_) =>
-                                                  x.name.clone()
-                                                        .map(|x| Value::from(x))
-                                                        .unwrap_or(x),
-                                              &ValueData::Macro(_) =>
-                                                  x.name.clone()
-                                                        .map(|x| Value::from(x))
-                                                        .unwrap_or(x),
-                                              _ => x
-                                          })
-                                          .map(|x| match &x.data {
-                                              &ValueData::Symbol(_) =>
-                                                  run_fn("fs/glob", &[x.clone()])
-                                                 .map(|x| x.wait())
-                                                 .unwrap_or(Ok(x.clone()))
-                                                 .map(|l|
-                                                      if l.into_seq().wait()
-                                                          .unwrap().len() == 0 {
-                                                          x.clone()
-                                                      } else {
-                                                          l
-                                                      }),
-                                              &ValueData::Str(_) =>
-                                                  run_fn("fs/glob", &[x.clone()])
-                                                 .map(|x| x.wait())
-                                                 .unwrap_or(Ok(x.clone()))
-                                                 .map(|l|
-                                                      if l.into_seq()
-                                                          .wait().unwrap().len() == 0 {
-                                                          x.clone()
-                                                      } else {
-                                                          l
-                                                      }),
-                                              _ => Ok(x)
-                                          })
-                                          .collect::<Result<Vec<Value>, _>>())
-                                   .and_then(|a| a.into_iter()
-                                                  .map(|x| x.into_args())
-                                                  .collect::<Eval<Vec<_>>>()
-                                                  .wait())
-                                   .map(|a| a.into_iter()
-                                             .flat_map(|x| x)
-                                             .collect::<Vec<_>>());
-                    let args = match args {
-                        Ok(r) => r,
-                        Err(e) => {
-                            // TODO: kill existing components
-                            return Err(LaunchError::Evaluation(e));
-                        }
-                    };
-
-                    // TODO: redirect or handle stderr
-                    let out_fd = last_output.as_ref().unwrap().as_fd();
-                    let cmd = Command::new(exec)
-                                      .invoked_using(invoked_name)
-                                      .args(args)
-                                      .stdin(
-                                          if last_output == Some(FDWrapper::Stdin) {
-                                              IoChannel::Inherited }
-                                          else {IoChannel::Specific(last_output
-                                                                   .take()
-                                                                   .unwrap()
-                                                                   .into_fd())})
-                                      .stdout(
-                                          if fwd_stdout { IoChannel::Inherited }
-                                          else { IoChannel::Pipe });
-                    let cmd = if background { cmd }
-                              else { cmd.foreground() };
-                    let process = match job.launch(cmd) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            // retake ownership of output FD
-                            FDWrapper::Pipe(out_fd);
-                            return Err(LaunchError::JobLaunch(e));
-                        }
-                    };
-
-                    if !fwd_stdout {
-                        last_output = Some(FDWrapper::Pipe(
-                                process.stdout()
-                                       .unwrap()
-                                       .into_raw_fd()));
-                    }
-                },
-                _ => {}
-            }
-        }
-
-        // if there's a plan in the buffer, we need to flush it
-        //
-        // NOTE: we don't need to worry about having the output already
-        // terminated here. The plan buffer will have items iff the previous
-        // element wasn't a command. If it was, the buffer would have been
-        // flushed already as part of launching it.
-        if !plan_buffer.is_empty() {
-            // figure out what output to use
-            let out = match self.elems.last().unwrap() {
-                &PlanElement::Stdout         => EvalOutput::PrettyStdout,
-                &PlanElement::AppendFile(_)  => unimplemented!(),
-                &PlanElement::AppendVar(_ )  => unimplemented!(),
-                &PlanElement::ToFile(_)      => unimplemented!(),
-                &PlanElement::IntoVar(_)     => unimplemented!(),
-                _                            => panic!("invalid plan terminator")
-            };
-
-            let eval = TransformEvaluation::launch(&mut job,
-                last_output.take().unwrap(), plan_buffer.drain(..), out);
-            if eval.is_none() {
-                // TODO close output FDs here
-                // TODO: specific error code
-                return Err(LaunchError::Unknown);
-            }
-        }
-
-        Ok(ActivePipeline { job })
-        */
     }
 }
 
