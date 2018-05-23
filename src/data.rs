@@ -184,11 +184,47 @@ pub enum ValueData {
     // TODO: Lazy(Box<FnOnce()->Value>),
 }
 
+#[derive(Clone)]
+/// Wrapper around strings which doesn't duplicate static values but allows
+/// dynamic creation
+pub enum ConstString {
+    Static(&'static str),
+    Owned(Arc<String>),
+}
+
+impl ConstString {
+    fn from_static(s: &'static str) -> Self {
+        ConstString::Static(s)
+    }
+
+    fn from_str(s: String) -> Self {
+        ConstString::Owned(Arc::new(s))
+    }
+}
+
+impl AsRef<str> for ConstString {
+    fn as_ref(&self) -> &str {
+        match self {
+            ConstString::Static(r) => r,
+            ConstString::Owned(ref s) => s.as_str()
+        }
+    }
+}
+
+impl fmt::Debug for ConstString {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ConstString::Static(r) => write!(f, "&{:?}", r),
+            ConstString::Owned(r)  => write!(f, "{:?}", &*r),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Documentation {
-    pub origin: Option<&'static str>,
-    pub short_desc: Option<&'static str>,
-    pub description: Option<&'static str>,
+    pub origin: Option<ConstString>,
+    pub short_desc: Option<ConstString>,
+    pub description: Option<ConstString>,
     pub forms: Vec<&'static [&'static str]>
 }
 
@@ -205,7 +241,13 @@ impl Documentation {
 
     /// Modify the origin of a documentation object
     pub fn origin(mut self, origin: &'static str) -> Self {
-        self.origin = Some(origin);
+        self.origin = Some(ConstString::from_static(origin));
+        self
+    }
+
+    /// Modify the origin of a documentation object with a dynamic string
+    pub fn origin_str(mut self, origin: String) -> Self {
+        self.origin = Some(ConstString::from_str(origin));
         self
     }
 
@@ -213,7 +255,15 @@ impl Documentation {
     /// 
     /// The passed text may be word-wrapped at arbitrary boundaries.
     pub fn desc(mut self, description: &'static str) -> Self {
-        self.description = Some(description);
+        self.description = Some(ConstString::from_static(description));
+        self
+    }
+
+    /// Modify the description of a documentation object with a dynamic string
+    /// 
+    /// The passed text may be word-wrapped at arbitrary boundaries.
+    pub fn desc_str(mut self, description: String) -> Self {
+        self.description = Some(ConstString::from_str(description));
         self
     }
 
@@ -221,7 +271,15 @@ impl Documentation {
     ///
     /// The passed text may be word-wrapped at arbitrary boundaries
     pub fn short(mut self, short: &'static str) -> Self {
-        self.short_desc = Some(short);
+        self.short_desc = Some(ConstString::from_static(short));
+        self
+    }
+
+    /// Modify the short description of a documentation object with a dynamic string
+    ///
+    /// The passed text may be word-wrapped at arbitrary boundaries
+    pub fn short_str(mut self, short: String) -> Self {
+        self.short_desc = Some(ConstString::from_str(short));
         self
     }
 

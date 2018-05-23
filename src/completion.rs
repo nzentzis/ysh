@@ -174,8 +174,9 @@ fn default_completer(seed: &str, entries: HashSet<EntryType>) -> Vec<Entry> {
                     what: if is_func {EntryType::FunctionBinding}
                           else {EntryType::VariableBinding},
                     text: name,
-                    docs: value.doc.and_then(|x| x.short_desc)
-                                   .map(|x| x.to_owned()),
+                    docs: value.doc.and_then(|x| x.short_desc
+                                                .as_ref()
+                                                .map(|d| d.as_ref().to_owned())),
                     weight: 1
                 });
             }

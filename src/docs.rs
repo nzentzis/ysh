@@ -115,12 +115,12 @@ impl DocFormat {
     pub fn render<W: Write>(&self,
                             doc: &Documentation,
                             out: &mut W) -> io::Result<()> {
-        if let Some(o) = doc.origin {
+        if let Some(ref o) = doc.origin {
             if let Some(w) = self.width {
                 // render origin centered
-                writeln!(out, "{:^width$}\n", o, width=w)?;
+                writeln!(out, "{:^width$}\n", o.as_ref(), width=w)?;
             } else {
-                writeln!(out, "{}\n", o)?;
+                writeln!(out, "{}\n", o.as_ref())?;
             }
         }
 
@@ -133,26 +133,26 @@ impl DocFormat {
         }
         writeln!(out, "")?;
 
-        if let Some(s) = doc.short_desc {
+        if let Some(ref s) = doc.short_desc {
             if self.format_codes {
                 write!(out, "{}", style::Bold)?;
             }
             if let Some(w) = self.width {
-                writeln!(out, "{}\n", word_wrap(w, s))?;
+                writeln!(out, "{}\n", word_wrap(w, s.as_ref()))?;
             } else {
-                writeln!(out, "{}\n", s)?;
+                writeln!(out, "{}\n", s.as_ref())?;
             }
             if self.format_codes {
                 write!(out, "{}", style::Reset)?;
             }
         }
 
-        if let Some(d) = doc.description {
+        if let Some(ref d) = doc.description {
             if let Some(w) = self.width {
-                let s = word_wrap(w, d);
+                let s = word_wrap(w, d.as_ref());
                 writeln!(out, "{}", s)?;
             } else {
-                writeln!(out, "{}", d)?;
+                writeln!(out, "{}", d.as_ref())?;
             }
         }
 
