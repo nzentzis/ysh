@@ -52,9 +52,8 @@ impl FDWrapper {
     }
 
     fn pipe_pair() -> (FDWrapper, FDWrapper) {
-        let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
+        let (o,i) = unistd::pipe2(fcntl::O_CLOEXEC)
                            .expect("cannot generate pipes");
-        println!("{} {}", i, o);
         let i = FDWrapper::Pipe(i);
         let o = FDWrapper::Pipe(o);
         (i,o)
@@ -311,6 +310,9 @@ impl TransformEvaluation {
                         ::std::fs::File::from_raw_fd(fd)
                     };
                     writeln!(f, "{}", to_write).unwrap();
+
+                    // don't close the file here so the FDWrapper gets a chance
+                    f.into_raw_fd();
                 },
                 FDWrapper::Stdin => panic!("Cannot output to stdin")
             }
