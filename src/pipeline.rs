@@ -54,6 +54,7 @@ impl FDWrapper {
     fn pipe_pair() -> (FDWrapper, FDWrapper) {
         let (i,o) = unistd::pipe2(fcntl::O_CLOEXEC)
                            .expect("cannot generate pipes");
+        println!("{} {}", i, o);
         let i = FDWrapper::Pipe(i);
         let o = FDWrapper::Pipe(o);
         (i,o)
@@ -90,10 +91,24 @@ impl ActivePipeline {
                     last_output = Some(FDWrapper::Pipe(f.into_raw_fd()));
                 },
                 p @ PlanStep::EvalGroup {..} => {
-                    let (i,o) = FDWrapper::pipe_pair();
-                    TransformEvaluation::launch(&mut job,
-                                                last_output.take(), i, p)?;
-                    last_output = Some(o);
+                    // if the next one is stdout, we don't need to create a pipe
+                    let out_chan = match steps_iter.peek() {
+                        Some(PlanStep::ToStdout) => Some(FDWrapper::Stdout),
+                        Some(PlanStep::ToFile {..}) => unimplemented!(),
+                        Some(PlanStep::ToVar {..}) => unimplemented!(),
+                        _ => None
+                    };
+
+                    if let Some(f) = out_chan {
+                        TransformEvaluation::launch(&mut job,
+                                                    last_output.take(), f, p)?;
+                        last_output = None;
+                    } else {
+                        let (i,o) = FDWrapper::pipe_pair();
+                        TransformEvaluation::launch(&mut job,
+                                                    last_output.take(), i, p)?;
+                        last_output = Some(o);
+                    }
                 },
                 PlanStep::Command {exec, invoked_name, args} => {
                     // check whether to link the output to stdout
@@ -108,9 +123,12 @@ impl ActivePipeline {
                         _ => None
                     };
 
+                    // save the output FD so we can reacquire it in the event of
+                    // a failure, since we'd leak the FD otherwise
+                    let out_fd = last_output.as_ref().unwrap().as_fd();
+
                     // set up the command
                     // TODO: redirect or handle stderr
-                    let out_fd = last_output.as_ref().unwrap().as_fd();
                     let stdin = if last_output == Some(FDWrapper::Stdin) {
                         IoChannel::Inherited
                     } else {
@@ -249,23 +267,21 @@ impl TransformEvaluation {
         job.spawn(move || {
             // TODO: error handling
             let res = expr.evaluate(&::environment::empty()).wait();
-            let mut term = terminal::acquire();
             let res = match res {
                 Ok(r) => r,
                 Err(e) => {
-                    writeln!(term.stderr(), "ysh: {:?} - {}", expr, e).unwrap();
+                    writeln!(io::stderr(),
+                    "ysh: {:?} - {}", expr, e).unwrap();
                     return;
                 }
             };
-            let _ = term;
 
             let to_write = match out_type {
                 EvalOutputType::IntoStr => {
                     match res.into_str().wait() {
                         Ok(r) => r,
                         Err(e) => {
-                            let mut term = terminal::acquire();
-                            writeln!(term.stderr(),
+                            writeln!(io::stderr(),
                                      "ysh: cannot convert to string: {}", e)
                                 .unwrap();
                             return;
@@ -276,8 +292,7 @@ impl TransformEvaluation {
                     match res.into_str().wait() {
                         Ok(r) => r,
                         Err(e) => {
-                            let mut term = terminal::acquire();
-                            writeln!(term.stderr(),
+                            writeln!(io::stderr(),
                                      "ysh: cannot convert to string: {}", e)
                                 .unwrap();
                             return;
@@ -289,8 +304,7 @@ impl TransformEvaluation {
 
             match out {
                 FDWrapper::Stdout => {
-                    let mut t = terminal::acquire();
-                    writeln!(t.stdout(), "{}", to_write).unwrap();
+                    writeln!(io::stdout(), "{}", to_write).unwrap();
                 },
                 FDWrapper::Pipe(fd) => {
                     let mut f = unsafe {
