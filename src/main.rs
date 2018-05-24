@@ -46,6 +46,7 @@ use data::{Value, ValueLike, EvalResult, Eval};
 use evaluate::Executable;
 
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
+static PLAN_DEBUG: AtomicBool = ATOMIC_BOOL_INIT;
 
 fn get_initial_paths() -> Value {
     use std::env;
@@ -142,6 +143,21 @@ impl environment::BindingProxy for EnvProxy {
     }
 }
 
+struct PlanDebugProxy();
+
+impl environment::BindingProxy for PlanDebugProxy {
+    fn get(&self) -> Value {
+        Value::from(PLAN_DEBUG.load(Ordering::Relaxed))
+    }
+
+    fn set(&self, val: Value) {
+        let b = val.into_bool().wait();
+        if let Ok(r) = b {
+            PLAN_DEBUG.store(r, Ordering::Relaxed);
+        }
+    }
+}
+
 fn init_environment() {
     library::initialize();
     completion::initialize();
@@ -209,6 +225,10 @@ fn init_environment() {
 
     // create virtual history list
     env.set_proxy("history", history::HistoryProxy{});
+
+    if cfg!(debug_assertions) {
+        env.set_proxy("plan-debug", PlanDebugProxy());
+    }
 }
 
 fn init_process_group() -> Result<(), nix::Error> {
@@ -309,7 +329,9 @@ fn main() {
                 continue;
             }
         };
-        println!("\r{:?}", plan);
+        if PLAN_DEBUG.load(Ordering::Relaxed) {
+            println!("\r{:?}", plan);
+        }
 
         match pipeline::ActivePipeline::launch(&plan, false) {
             Ok(x) => x.wait(),
