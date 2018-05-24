@@ -15,6 +15,8 @@ lazy_static! {
     static ref DOC_DEF: Documentation = Documentation::new()
         .form(&["sym"])
         .form(&["sym", "value"])
+        .form(&["sym", "short-doc", "value"])
+        .form(&["sym", "short-doc", "long-doc", "value"])
         .short("Create or retrieve global symbol bindings")
         .desc("With 1 argument, returns the value bound to sym if one exists \
                and returns () otherwise.\n \
@@ -131,19 +133,11 @@ fn core_if(lex: &Environment, args: &[Value]) -> Eval<Value> {
 /// If no value is specified, this will retrieve the given symbol from the
 /// global environment or () if not present.
 fn core_def(lex: &Environment, args: &[Value]) -> Eval<Value> {
-    Eval::from(if args.len() == 1 {
-        let sym = match args[0].get_symbol().wait() {
-            Ok(r) => r,
-            Err(e) => return Eval::from(Err(e))
-        };
-        if let Some(ident) = sym {
-            Ok(global().get(ident).unwrap_or_else(|| Value::empty()))
-        } else {
-            Err(EvalError::TypeError(
-                    format!("argument to def cannot be converted to a symbol")))
-        }
-    } else if args.len() == 2 {
-        let sym = match args[0].get_symbol().wait() {
+    fn define(sym: &Value,
+              val: &Value,
+              doc: Option<Documentation>,
+              lex: &Environment) -> Eval<Value> {
+        let sym = match sym.get_symbol().wait() {
             Ok(r) => r,
             Err(e) => return Eval::from(Err(e))
         };
@@ -154,19 +148,51 @@ fn core_def(lex: &Environment, args: &[Value]) -> Eval<Value> {
             Err(e) => return Eval::from(Err(e))
         };
 
-        let body = match args[1].evaluate(lex).wait() {
+        let body = match val.evaluate(lex).wait() {
             Ok(r) => r,
             Err(e) => return Eval::from(Err(e))
         };
 
-        global().set(sym, body);
-        Ok(Value::empty())
-    } else {
-        Err(EvalError::Arity {
-            expected: 2,
-            got: args.len()
-        })
-    })
+        global().set(sym, if let Some(d) = doc {body.document(&d)} else {body});
+        Eval::from(Ok(Value::empty()))
+    }
+
+    match args {
+        [sym] => {
+            let sym = match sym.get_symbol().wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
+            Eval::from(if let Some(ident) = sym {
+                Ok(global().get(ident).unwrap_or_else(|| Value::empty()))
+            } else {
+                Err(EvalError::TypeError(
+                        format!("argument to def cannot be converted to a symbol")))
+            })
+        },
+        [sym, value] => define(sym, value, None, lex),
+        [sym, shortdoc, value] => {
+            let short = match shortdoc.into_str().wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
+            define(sym, value, Some(Documentation::new().short_str(short)), lex)
+        },
+        [sym, shortdoc, longdoc, value] => {
+            let short = match shortdoc.into_str().wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
+            let long = match longdoc.into_str().wait() {
+                Ok(r) => r,
+                Err(e) => return Eval::from(Err(e))
+            };
+            define(sym, value, Some(Documentation::new()
+                                    .short_str(short)
+                                    .desc_str(long)), lex)
+        },
+        _ => Eval::from(Err(EvalError::Arity {expected: 2, got: args.len()}))
+    }
 }
 
 /// Evaluate the argument forms in the order in which they were given

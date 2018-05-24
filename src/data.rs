@@ -220,7 +220,7 @@ impl fmt::Debug for ConstString {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Documentation {
     pub origin: Option<ConstString>,
     pub short_desc: Option<ConstString>,
@@ -335,7 +335,7 @@ pub struct Value {
     pub loc: Option<SourceRegion>,
     pub data: ValueData,
     pub name: Option<Identifier>,
-    pub doc: Option<&'static Documentation>
+    pub doc: Option<Documentation>
 }
 
 impl Value {
@@ -346,8 +346,8 @@ impl Value {
     }
 
     /// Add documentation to a value
-    pub fn document(mut self, doc: &'static Documentation) -> Value {
-        self.doc = Some(doc);
+    pub fn document(mut self, doc: &Documentation) -> Value {
+        self.doc = Some(doc.to_owned());
         self
     }
 
