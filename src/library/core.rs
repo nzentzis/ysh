@@ -42,8 +42,8 @@ If more than one inner form is given, they are evaluated in order using the same
 semantics as 'do'.");
 
     static ref DOC_FN: Documentation = Documentation::new()
-        .form(&["(args*)", "body*"])
-        .form(&["((args0*) body0*)", "((args1*) body1*)", "..."])
+        .form(&["short-doc?", "long-doc?", "(args*)", "body*"])
+        .form(&["short-doc?", "long-doc?", "((args0*) body0*)", "((args1*) body1*)", "..."])
         .short("Create an anonymous function.");
     
     static ref DOC_QUOTE: Documentation = Documentation::new()
@@ -384,9 +384,24 @@ fn core_fn(lex: &Environment, args: &[Value]) -> Eval<Value> {
         else { Some(res) }
     }
 
+    // figure out how many doc args we have
+    let mut cur_arg_idx = 0; // current argument we're looking at
+    let short_doc = match args[0].get_string().wait() {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
+    let short_doc = if let Some(s) = short_doc {cur_arg_idx += 1; Some(s)}
+                    else {None};
+    let long_doc = match args[cur_arg_idx].get_string().wait() {
+        Ok(r) => r,
+        Err(e) => return Eval::from(Err(e))
+    };
+    let long_doc = if let Some(s) = long_doc {cur_arg_idx += 1; Some(s)}
+                    else {None};
+
     // it's single form if the first element of the first arg isn't a list
     // since no valid bindings are lists, and multi-form if it *is* a list
-    let is_single_form = if let Some(x) = args[0].into_iter().next() {
+    let is_single_form = if let Some(x) = args[cur_arg_idx].into_iter().next() {
         let x = match x {
             Ok(r) => r,
             Err(e) => return Eval::from(Err(e))
@@ -398,14 +413,14 @@ fn core_fn(lex: &Environment, args: &[Value]) -> Eval<Value> {
     // build list of forms and patterns
     let mut variants: Vec<(Vec<PatternPiece>, Vec<Value>)> = Vec::new();
     if is_single_form {
-        let pat = match make_pattern(&args[0]) {
+        let pat = match make_pattern(&args[cur_arg_idx]) {
             Ok(r) => r,
             Err(e) => return Eval::from(Err(e))
         };
-        let vals: Vec<_> = args[1..].iter().cloned().collect();
+        let vals: Vec<_> = args[cur_arg_idx+1..].iter().cloned().collect();
         variants.push((pat, vals));
     } else {
-        for l in args.iter() {
+        for l in args[cur_arg_idx..].iter() {
             let l = match l.into_seq().wait() {
                 Ok(r) => r,
                 Err(e) => return Eval::from(Err(e))
@@ -422,6 +437,11 @@ fn core_fn(lex: &Environment, args: &[Value]) -> Eval<Value> {
             variants.push((pat, body));
         }
     }
+
+    // generate documentation
+    let mut doc = Documentation::new();
+    if let Some(s) = short_doc { doc = doc.short_str(s); }
+    if let Some(s) = long_doc { doc = doc.desc_str(s); }
 
     Eval::from(Ok(Value::from(Executable::Interpreted(lex.to_owned(),
         Arc::new(move |env, args| {
@@ -442,7 +462,7 @@ fn core_fn(lex: &Environment, args: &[Value]) -> Eval<Value> {
                 got: args.len(),
                 expected: variants[0].0.len()
             }))
-        })))))
+        }))).document(&doc)))
 }
 
 /// Return the literal arguments without interpretation or substitution
