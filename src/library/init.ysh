@@ -1,0 +1,14 @@
+(defn doseq
+    "Consume every element of a list in order, and return the last"
+    "This is useful for consuming map/filter functions with side-effects."
+    (xs)
+    (let (f (first xs)
+          r (rest xs))
+        (if (empty? r) f (doseq r))))
+
+(defmacro for
+    "Run some code, binding a variable to every element of a list"
+    (symbol iterable body)
+    (let (f (conj '(fn) (cons '() symbol) body)
+          m (conj '(map) f iterable))
+        (conj '(doseq) m)))
