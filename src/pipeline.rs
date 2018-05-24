@@ -277,24 +277,32 @@ impl TransformEvaluation {
 
             let to_write = match out_type {
                 EvalOutputType::IntoStr => {
-                    match res.into_str().wait() {
-                        Ok(r) => r,
-                        Err(e) => {
-                            writeln!(io::stderr(),
-                                     "ysh: cannot convert to string: {}", e)
-                                .unwrap();
-                            return;
+                    if res == Value::empty() {
+                        String::new()
+                    } else {
+                        match res.into_str().wait() {
+                            Ok(r) => r,
+                            Err(e) => {
+                                writeln!(io::stderr(),
+                                         "ysh: cannot convert to string: {}", e)
+                                    .unwrap();
+                                return;
+                            }
                         }
                     }
                 },
                 EvalOutputType::PrettyPrint => {
-                    match res.into_str().wait() {
-                        Ok(r) => r,
-                        Err(e) => {
-                            writeln!(io::stderr(),
-                                     "ysh: cannot convert to string: {}", e)
-                                .unwrap();
-                            return;
+                    if res == Value::empty() {
+                        String::new()
+                    } else {
+                        match res.into_str().wait() {
+                            Ok(r) => r,
+                            Err(e) => {
+                                writeln!(io::stderr(),
+                                         "ysh: cannot convert to string: {}", e)
+                                    .unwrap();
+                                return;
+                            }
                         }
                     }
                 },
@@ -303,7 +311,9 @@ impl TransformEvaluation {
 
             match out {
                 FDWrapper::Stdout => {
-                    writeln!(io::stdout(), "{}", to_write).unwrap();
+                    if !to_write.is_empty() {
+                        writeln!(io::stdout(), "{}", to_write).unwrap();
+                    }
                 },
                 FDWrapper::Pipe(fd) => {
                     let mut f = unsafe {
