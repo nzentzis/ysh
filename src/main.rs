@@ -163,9 +163,8 @@ fn init_environment() {
     completion::initialize();
 
     let env = global();
-    env.set("print", Value::from(Executable::native(|_, _| {
-            //println!("{:?}", args);
-            println!("value!");
+    env.set("print", Value::from(Executable::native(|_, args| {
+            println!("{:?}", args);
             Ok(Value::empty())
         })));
 
