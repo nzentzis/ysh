@@ -119,7 +119,7 @@ impl PlanElement {
     /// 1. If the first element is a symbol with a bound value, and there's more
     ///    than one element, return the elements as a list.
     /// 2. If the first element is a symbol with a bound value, and it's the
-    ///    only element, return the bound value.
+    ///    only element, return the symbol.
     /// 3. If the first element can't be converted with `get_string`, return
     ///    either all elements as a list (if more than one) or the first.
     /// 4. Get the first element's string value using `get_string`, and try to
@@ -139,7 +139,7 @@ impl PlanElement {
             // if we find it, use that
             if let Some(r) = r {
                 if xform.0.len() == 1 {
-                    return Ok(PlanElement::Expression(r));
+                    return Ok(PlanElement::Expression(xform.0[0].clone()));
                 } else {
                     return Ok(PlanElement::Expression(Value::list(xform.0)));
                 }

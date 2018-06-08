@@ -441,10 +441,22 @@ impl Value {
                                         .unwrap().unwrap(), v)))
     }
 
-    /// Perform macro expansion on the contained form
+    /// Quote the form
+    ///
+    /// This just returns a new form wrapping this one in `(quote some-form)`.
+    pub fn quote(&self) -> Value {
+        Value::list(vec![Value::from(Identifier::new("quote")), self.to_owned()])
+    }
+
+    /// Perform macro expansion on the contained form, repeatedly if necessary,
+    /// until no expansions remain to be performed.
     pub fn macroexpand(self) -> Eval<Value> {
         match self.data {
             ValueData::List(ref xs) => {
+                // might be a macro call, but could still be a normal function
+                // call
+                //
+                // check whether the first element is a resolvable symbol
                 let macro_expr: Option<Value> =
                     if let Some(f) = xs.first() {
                         if f.is_macro() { Some(f.to_owned()) }
@@ -457,6 +469,8 @@ impl Value {
                                        ::environment::global().get(&*(sym.0)))
                         }
                     } else { None };
+
+                // if so, check to make sure it's a macro
                 let macro_expr =
                     if let Some(m) = macro_expr {
                         match m.data {
@@ -465,13 +479,20 @@ impl Value {
                         }
                     } else { None };
 
-                // check the first element to see if we can resolve it
+                // We have an executable macro, so this is a macro form. Go and
+                // run the macro.
                 if let Some(exec) = macro_expr {
                     let body = match self.into_seq().wait() {
                         Ok(x) => x,
                         Err(e) => return Eval::from(Err(e))
                     };
-                    let r = match exec.run(&::environment::empty(), &body[1..])
+                    
+                    // we have to quote the body forms so that when they're
+                    // evaluated by the macro function it doesn't run them
+                    let quoted_body = body[1..].iter()
+                                      .map(|form| form.quote())
+                                      .collect::<Vec<_>>();
+                    let r = match exec.run(&::environment::empty(), &quoted_body)
                                       .wait() {
                         Ok(x) => x,
                         Err(e) => return Eval::from(Err(e))
