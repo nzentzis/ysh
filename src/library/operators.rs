@@ -103,6 +103,19 @@ lazy_static! {
                valid, this function will fail. Maps can use any hashable type \
                as a key and vectors can use integers. Undefined spaces in lists \
                will be filled in with empty () values.");
+
+    static ref DOC_GET: Documentation = Documentation::new()
+        .origin("ops")
+        .form(&["key"])
+        .form(&["keys"])
+        .form(&["object", "key"])
+        .form(&["object", "key0", "key1", "..."])
+        .short("Look up one or more keys in an associative structure")
+        .desc("Evaluate the inputs, then return the elements at the given keys \
+               in an associative structure. If the key is not present, return \
+               nil. With more than one key, collect the results of looking up \
+               each input as a list. With one input, build a transformer looking \
+               up the key or keys.");
 }
 
 fn fn_add(_: &Environment, args: &[Value]) -> EvalResult {
@@ -354,6 +367,77 @@ fn fn_set(_: &Environment, args: &[Value]) -> EvalResult {
     }
 }
 
+/// Get values in an associative structure
+fn fn_get(_: &Environment, args: &[Value]) -> EvalResult {
+    if args.len() == 0 {
+        Err(EvalError::Arity {
+            got: args.len(),
+            expected: 2
+        })
+    } else if args.len() == 1 { // build transformer
+        // check whether the input is a seq or not
+        match &args[0].data {
+            ValueData::List(xs) => {
+                let keys = xs.clone();
+                return Ok(Value::from(Executable::native(move |_, args| {
+                    let mut res = Vec::with_capacity(args.len());
+                    for structure in args {
+                        let mut elem = Vec::with_capacity(keys.len());
+                        for key in keys.iter() {
+                            match structure.get_key(&key).wait() {
+                                Ok(v) => { elem.push(v.unwrap_or_else(|| Value::empty())); }
+                                Err(e) => {
+                                    return Err(e);
+                                }
+                            }
+                        }
+
+                        if elem.len() == 1 { res.push(elem.into_iter().next().unwrap()); }
+                        else { res.push(Value::list(elem)); }
+                    }
+
+                    if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
+                    else { Ok(Value::list(res)) }
+                })));
+            },
+            _ => {}
+        }
+
+        // build single-key get transformer
+        let key = args[0].to_owned();
+        Ok(Value::from(Executable::native(move |_, args| {
+            let mut res = Vec::with_capacity(args.len());
+            for structure in args {
+                match structure.get_key(&key).wait() {
+                    Ok(v) => { res.push(v.unwrap_or_else(|| Value::empty())); }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            }
+
+            if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
+            else { Ok(Value::list(res)) }
+        })))
+    } else {
+        let structure = &args[0];
+        let keys = &args[1..];
+
+        let mut res = Vec::with_capacity(keys.len());
+        for key in keys {
+            match structure.get_key(&key).wait() {
+                Ok(v) => { res.push(v.unwrap_or_else(|| Value::empty())); }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+
+        if res.len() == 1 { Ok(res.into_iter().next().unwrap()) }
+        else { Ok(Value::list(res)) }
+    }
+}
+
 pub fn initialize() {
     let env = global();
     env.set("+", Value::from(Executable::native(fn_add)).document(&DOC_ADD));
@@ -380,6 +464,7 @@ pub fn initialize() {
     env.set("inc", Value::from(Executable::native(fn_inc)).document(&DOC_INC));
 
     env.set("set", Value::from(Executable::native(fn_set)).document(&DOC_SET));
+    env.set("get", Value::from(Executable::native(fn_get)).document(&DOC_GET));
 }
 
 #[cfg(test)]

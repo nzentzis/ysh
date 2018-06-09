@@ -150,6 +150,20 @@ pub trait ValueLike : Send + Sync {
                                   .collect()))
     }
 
+    /// Get the element at a given key, treating it as an associative structure
+    fn get_key(&self, key: &Value) -> Eval<Option<Value>> {
+        Eval::from(Err(EvalError::TypeError(String::from(
+                    "Cannot get key in a non-associative structure"))))
+    }
+
+    /// Set a given key to a value in an associative structure
+    ///
+    /// Returns a modified copy of the structure.
+    fn set_key(&self, key: Value, value: Value) -> Eval<Value> {
+        Eval::from(Err(EvalError::TypeError(String::from(
+                    "Cannot set key in a non-associative structure"))))
+    }
+
     /// Evaluate this value-like object in a given lexical environment
     fn evaluate(&self, env: &Environment) -> Eval<Value>;
 
@@ -827,6 +841,111 @@ impl ValueLike for Value {
                                       .flat_map(|x| x)
                                       .collect())),
             _ => Eval::from(self.into_str().wait().map(|r| vec![r]))
+        }
+    }
+
+    fn get_key(&self, key: &Value) -> Eval<Option<Value>> {
+        match self.data {
+            ValueData::List(ref xs) => {
+                // keys are integers
+                match key.into_num().wait() {
+                    Ok(Some(n)) => {
+                        let idx = n.round();
+
+                        if (idx < 0) || ((idx as usize) >= xs.len()) {
+                            Eval::from(Ok(None))
+                        } else {
+                            Eval::from(Ok(Some(xs[idx as usize].clone())))
+                        }
+                    },
+                    Ok(None) => {
+                        Eval::from(Err(EvalError::TypeError(String::from(
+                            "Cannot index list with non-integer key"))))
+                    }
+                    Err(e) => {Eval::from(Err(e))}
+                }
+            },
+            ValueData::Map(ref m) => {
+                match key.hash().wait() {
+                    Ok(Some(h)) => Eval::from(Ok(m.get(&h).cloned())),
+                    Ok(None) =>
+                        Eval::from(Err(EvalError::TypeError(String::from(
+                             "Cannot index map with non-hashable type")))),
+                    Err(e) => Eval::from(Err(e))
+                }
+            },
+            ValueData::Polymorphic(ref p) => p.get_key(key),
+            _ => {
+                Eval::from(Err(EvalError::TypeError(String::from(
+                    "Cannot get key in a non-associative structure"))))
+            }
+        }
+    }
+
+    fn set_key(&self, key: Value, value: Value) -> Eval<Value> {
+        match self.data {
+            ValueData::List(ref xs) => {
+                // keys are integers
+                match key.into_num().wait() {
+                    Ok(Some(n)) => {
+                        let idx = n.round();
+
+                        if (idx < 0) || ((idx as usize) >= xs.len()) {
+                            if (idx as usize) == xs.len() {
+                                // append
+                                let mut ys = xs.clone();
+                                ys.push(value);
+                                Eval::from(Ok(Value {
+                                    loc: None,
+                                    name: None,
+                                    doc: None,
+                                    data: ValueData::List(ys)
+                                }))
+                            } else {
+                                Eval::from(Err(EvalError::TypeError(String::from(
+                                    "List index out of bounds"))))
+                            }
+                        } else {
+                            let mut ys = xs.clone();
+                            ys[idx as usize] = value;
+                            Eval::from(Ok(Value {
+                                loc: None,
+                                name: None,
+                                doc: None,
+                                data: ValueData::List(ys)
+                            }))
+                        }
+                    },
+                    Ok(None) => {
+                        Eval::from(Err(EvalError::TypeError(String::from(
+                            "Cannot index list with non-integer key"))))
+                    }
+                    Err(e) => {Eval::from(Err(e))}
+                }
+            },
+            ValueData::Map(ref m) => {
+                match key.hash().wait() {
+                    Ok(Some(h)) => {
+                        let mut n = m.to_owned();
+                        n.insert(h, value);
+                        Eval::from(Ok(Value {
+                            loc: None,
+                            name: None,
+                            doc: None,
+                            data: ValueData::Map(n)
+                        }))
+                    },
+                    Ok(None) =>
+                        Eval::from(Err(EvalError::TypeError(String::from(
+                             "Cannot index map with non-hashable type")))),
+                    Err(e) => Eval::from(Err(e))
+                }
+            },
+            ValueData::Polymorphic(ref p) => p.set_key(key, value),
+            _ => {
+                Eval::from(Err(EvalError::TypeError(String::from(
+                    "Cannot set key in a non-associative structure"))))
+            }
         }
     }
 
