@@ -461,7 +461,10 @@ impl Job {
 
     /// Wait for all child processes to terminate
     pub fn wait(&mut self) -> nix::Result<()> {
-        for c in self.tasks.iter_mut() {
+        // go backwards, otherwise if the last element in the chain terminates
+        // and ends, it won't get reclaimed and its parents won't die due to
+        // SIGPIPE
+        for c in self.tasks.iter_mut().rev() {
             c.wait()?;
         }
 
