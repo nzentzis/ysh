@@ -226,6 +226,7 @@ impl Command {
             signal::sigaction(signal::SIGTSTP, &default)?;
             signal::sigaction(signal::SIGTTIN, &default)?;
             signal::sigaction(signal::SIGTTOU, &default)?;
+            signal::sigaction(signal::SIGPIPE, &default)?;
             signal::sigaction(signal::SIGCHLD, &default)?;
         }
 
