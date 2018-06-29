@@ -49,6 +49,7 @@ impl Drop for PipeWriter {
 /// closed.
 #[derive(Copy, Clone, PartialEq)]
 pub enum IoChannel {
+    /// The value of the channel is inherited from the parent process
     Inherited,
     Pipe,
     Specific(RawFd)
@@ -60,11 +61,7 @@ impl IoChannel {
             -> nix::Result<(RawFd, Option<RawFd>)> {
         Ok(match self {
             &IoChannel::Inherited => {
-                // clone the FD
-                let new_fd = fcntl::fcntl(
-                                inherit,
-                                fcntl::FcntlArg::F_DUPFD_CLOEXEC(inherit))?;
-                (new_fd, None)
+                (inherit, None)
             },
             &IoChannel::Pipe => {
                 let (r,w) = unistd::pipe2(fcntl::O_CLOEXEC)?;
@@ -166,9 +163,9 @@ impl Command {
         match unistd::fork()? {
             unistd::ForkResult::Parent { child, .. } => {
                 // clean up file descriptors
-                unistd::close(in_chld)?;
-                unistd::close(out_chld)?;
-                unistd::close(err_chld)?;
+                if in_chld != 0 { unistd::close(in_chld)?; }
+                if out_chld != 1 { unistd::close(out_chld)?; }
+                if err_chld != 2 { unistd::close(err_chld)?; }
 
                 Ok(Process {
                     pid: child,
@@ -231,9 +228,9 @@ impl Command {
         }
 
         // move FDs around
-        unistd::dup2(ioe.0, 0).unwrap(); // stdin
-        unistd::dup2(ioe.1, 1).unwrap(); // stdout
-        unistd::dup2(ioe.2, 2).unwrap(); // stderr
+        if ioe.0 != 0 { unistd::dup2(ioe.0, 0).unwrap(); } // stdin
+        if ioe.1 != 1 { unistd::dup2(ioe.1, 1).unwrap(); } // stdout
+        if ioe.2 != 2 { unistd::dup2(ioe.2, 2).unwrap(); } // stderr
         if ioe.0 != 0 { unistd::close(ioe.0).unwrap(); }
         if ioe.1 != 1 { unistd::close(ioe.1).unwrap(); }
         if ioe.2 != 2 { unistd::close(ioe.2).unwrap(); }
