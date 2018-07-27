@@ -4,8 +4,40 @@ use std::io::prelude::*;
 
 use termion::*;
 
+use data::*;
+use environment::{empty, global};
 use editor::{LineEditor, EditingDiscipline};
 use completion::{EntryType, CompletionSet};
+
+/// Figure out what the left-hand prompt is
+fn get_lprompt() -> String {
+    if let Some(obj) = global().get("user/left-prompt") {
+        obj.get_string().wait().ok()
+           .and_then(|r| r)
+           .or_else(|| obj.execute(&empty(), &[]).wait()
+                          .and_then(|r| r.get_string().wait())
+                          .ok()
+                          .and_then(|r| r))
+           .unwrap_or_else(|| String::from("$ "))
+    } else {
+        String::from("$ ")
+    }
+}
+
+/// Figure out what the right-hand prompt is
+fn get_rprompt() -> String {
+    if let Some(obj) = global().get("user/right-prompt") {
+        obj.get_string().wait().ok()
+           .and_then(|r| r)
+           .or_else(|| obj.execute(&empty(), &[]).wait()
+                          .and_then(|r| r.get_string().wait())
+                          .ok()
+                          .and_then(|r| r))
+           .unwrap_or_else(|| String::from(""))
+    } else {
+        String::from("")
+    }
+}
 
 /// Line input renderer
 ///
@@ -23,9 +55,26 @@ impl<W: Write> LineRenderer<W> {
             -> io::Result<()> {
         let buf = editor.buf();
         let s = buf.as_string();
-        write!(self.output, "\r{}$ {}\r{}",
-               clear::CurrentLine, s,
-               cursor::Right(2+buf.cursor() as u16))?;
+        let lprompt = get_lprompt();
+        let rprompt = get_rprompt();
+
+        // render left prompt
+        write!(self.output, "\r{}{}{}",
+               clear::CurrentLine, lprompt, s);
+
+        // render right prompt then reset position
+        let (tty_cols, tty_rows) = terminal_size().unwrap_or((80, 24));
+        let avail_space = tty_cols as usize - (lprompt.len() + s.len());
+
+        let to_write = if rprompt.len() > avail_space {
+            unimplemented!()
+        } else { rprompt };
+        let tgt_pos = tty_cols as usize - to_write.len();
+
+        write!(self.output, "\r{}{}\r{}",
+               cursor::Right(tgt_pos as u16),
+               to_write,
+               cursor::Right((lprompt.len()+buf.cursor()) as u16))?;
         self.output.flush()
     }
 
@@ -65,8 +114,14 @@ impl<W: Write> CompleteRenderer<W> {
         };
 
         // draw prompt
-        write!(self.output, "\r{}$ {}{}{}{}\r", clear::CurrentLine, s,
+        let l_prompt = get_lprompt();
+        let r_prompt = get_rprompt();
+        write!(self.output, "\r{}{}{}{}{}{}\r", clear::CurrentLine, l_prompt, s,
                style::Italic, after_input, style::NoItalic)?;
+
+        if !r_prompt.is_empty() {
+            // TODO: render right-hand strings
+        }
 
         // draw completion list, capped to fixed size
         // TODO: make size configurable
@@ -131,11 +186,21 @@ impl<W: Write> CompleteRenderer<W> {
             write!(self.output, "{}\r", color::Fg(color::Reset))?;
         }
 
+        // figure out what to draw for the right-hand side
+        let (tty_cols, tty_rows) = terminal_size().unwrap_or((80, 24));
+        let avail_space = tty_cols as usize - (l_prompt.len() + s.len());
+
+        let to_write = if r_prompt.len() > avail_space {
+            unimplemented!()
+        } else { r_prompt };
+        let tgt_pos = tty_cols as usize - to_write.len();
+
         // move back to start
-        write!(self.output, "{}{}\r{}",
+        write!(self.output, "{}{}\r{}{}\r{}",
                clear::AfterCursor,
                cursor::Up(nlines as u16),
-               cursor::Right(2+buf.cursor() as u16))?;
+               cursor::Right(tgt_pos as u16), to_write,
+               cursor::Right((l_prompt.len()+buf.cursor()) as u16))?;
         self.output.flush()
     }
 
