@@ -796,6 +796,21 @@ impl ValueLike for Value {
     fn into_repr(&self) -> Eval<String> {
         match &self.data {
             &ValueData::Str(ref s) => Eval::from(Ok(format!("\"{}\"", s))),
+            &ValueData::List(ref l) => {
+                let mut s = String::with_capacity(128);
+                s.push('(');
+                let xs = l.into_iter()
+                          .map(|x| x.into_repr())
+                          .collect::<Eval<Vec<_>>>()
+                          .wait();
+                let xs = match xs {
+                    Err(e) => return Eval::from(Err(e)),
+                    Ok(r)  => r,
+                };
+                s.push_str(&xs.join(" "));
+                s.push(')');
+                Eval::from(Ok(s))
+            },
             _ => self.into_str()
         }
     }
@@ -1375,6 +1390,8 @@ mod tests {
         assert_eq!(&Value::from(true).into_repr().wait().unwrap(), "true");
         assert_eq!(&Value::from(false).into_repr().wait().unwrap(), "false");
         assert_eq!(&Value::str("foo").into_repr().wait().unwrap(), "\"foo\"");
+        assert_eq!(&Value::list(vec![Value::str("foo")]).into_repr()
+                  .wait().unwrap(), "(\"foo\")");
         assert_eq!(&Value::empty().into_repr().wait().unwrap(), "()");
     }
 }
