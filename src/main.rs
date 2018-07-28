@@ -5,6 +5,8 @@ extern crate libc;
 extern crate nix;
 extern crate parking_lot;
 extern crate futures;
+extern crate crossbeam;
+extern crate walkdir;
 
 // base modules
 #[macro_use] mod util;
