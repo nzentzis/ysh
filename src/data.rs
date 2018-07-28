@@ -1365,3 +1365,16 @@ impl Pipeline {
         Value::list(v)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_into_repr() {
+        assert_eq!(&Value::from(true).into_repr().wait().unwrap(), "true");
+        assert_eq!(&Value::from(false).into_repr().wait().unwrap(), "false");
+        assert_eq!(&Value::str("foo").into_repr().wait().unwrap(), "\"foo\"");
+        assert_eq!(&Value::empty().into_repr().wait().unwrap(), "()");
+    }
+}

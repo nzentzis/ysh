@@ -1039,7 +1039,7 @@ mod test {
                     PlanStep::EvalGroup {
                         in_type: EvalInputType::PolyObject,
                         out_type: EvalOutputType::PrettyPrint,
-                        body: vec![global().get("test-symbol").unwrap()]
+                        body: vec![Value::from(Identifier::new("test-symbol"))]
                     },
                     PlanStep::ToStdout]
             });
