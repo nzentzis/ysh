@@ -50,6 +50,13 @@ use evaluate::Executable;
 static RUN_SHELL: AtomicBool = ATOMIC_BOOL_INIT;
 static PLAN_DEBUG: AtomicBool = ATOMIC_BOOL_INIT;
 
+lazy_static! {
+    static ref DOC_EXIT: data::Documentation = data::Documentation::new()
+        .short("Exits the shell's core REPL")
+        .desc("This function sets a flag, so the core shell loop will exit \
+               instead of repeating the next time it would read user input.");
+}
+
 fn get_initial_paths() -> Value {
     use std::env;
 
@@ -210,7 +217,7 @@ fn init_environment() {
 
     env.set("exit", Value::from(Executable::native(|_,_| {
             RUN_SHELL.store(false, Ordering::Relaxed);
-            Ok(Value::empty()) })));
+            Ok(Value::empty()) })).document(&DOC_EXIT));
 
     // recovery function to restore the system environment in case something got
     // seriously borked
