@@ -652,6 +652,33 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Create a simple plan to run the given program as a foreground process
+    /// and pass the provided strings as arguments.
+    /// 
+    /// This is a utility function that calls out to the rest of the planning
+    /// infrastructure to do its actual work. It will avoid printing messages
+    /// to the console.
+    pub fn run_cmd(name: &str, args: &[&str]) -> Result<Self, PlanningError> {
+        let opts = if let Some(cmds) = find_command(&name) { cmds }
+                       else { return Err(PlanningError::NotFound); };
+        if opts.len() != 1 { return Err(PlanningError::NotFound); }
+
+        let path = opts.into_iter().next().unwrap();
+
+        Ok(Plan {
+            steps: vec![
+                PlanStep::FromStdin,
+                PlanStep::Command {
+                    exec: path,
+                    invoked_name: name.to_owned(),
+                    args: args.iter()
+                              .map(|a| a.as_bytes().to_owned())
+                              .collect::<Vec<_>>()
+                }
+            ]
+        })
+    }
+
     /// Create a plan from the given pipeline
     ///
     /// The resulting plan will be frozen if generated successfully

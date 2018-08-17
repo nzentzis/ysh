@@ -182,6 +182,7 @@ pub trait ValueLike : Send + Sync {
     fn first(&self) -> Eval<Option<Value>>;
 }
 
+// TODO: add path type
 #[derive(Clone)]
 pub enum ValueData {
     Boolean(bool),

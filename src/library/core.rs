@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use planner;
+use pipeline;
 use environment::*;
 use data::*;
 use evaluate::*;
@@ -603,9 +605,7 @@ fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
             }
         }
     }
-    Err(EvalError::Runtime(String::from("documentation not found")))
 
-    /*
     // find man command
     let cmd = ::evaluate::find_command("man");
     let cmd = if let Some(cmd) = cmd { cmd }
@@ -621,9 +621,26 @@ fn fn_man(env: &Environment, args: &[Value]) -> EvalResult {
                 String::from("multiple man commands found")));
     }
 
-    let pth = &cmd[0];
-    unimplemented!()
-    */
+    // build an pipeline to run man
+    // TODO: use path type and remove potential panic
+    let mut xform = vec![Value::str(cmd[0].to_str().unwrap())];
+    xform.extend(args.iter().cloned());
+    let pipeline = Pipeline {
+        elements: vec![PipelineComponent {
+                xform: Transformer(xform),
+                link: None
+            }],
+        terminals: vec![]
+    };
+
+    // TODO: add evalerror for this
+    let plan = planner::Plan::build(pipeline)
+              .map_err(|_| EvalError::Unknown)?;
+    let active = pipeline::ActivePipeline::launch(&plan, false)
+                .map_err(|e| EvalError::Runtime(format!("{:?}", e)))?;
+
+    active.wait();
+    Ok(Value::empty())
 }
 
 /// Repeatedly read forms from input streams and evaluate them. Return ().
@@ -676,7 +693,7 @@ pub fn initialize() {
                           .document(&DOC_DEFN));
     env.set("eval", Value::from(Executable::native(core_eval))
                           .document(&DOC_EVAL));
-    env.set("doc", Value::from(Executable::native(fn_man))
+    env.set("man", Value::from(Executable::native(fn_man))
                          .document(&DOC_MAN));
     env.set("source", Value::from(Executable::native(fn_source))
                             .document(&DOC_SOURCE));

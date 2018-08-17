@@ -384,6 +384,9 @@ pub struct ActivePipeline {
     job: Job,
 }
 
+// TODO: add a way for consumers to retrieve evaluation errors from inside the
+//       pipeline, so shell functions can yield underlying eval errors from
+//       themselves
 impl ActivePipeline {
     /// Wait until all the processes in the pipeline have terminated
     pub fn wait(mut self) {
