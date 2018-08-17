@@ -41,17 +41,17 @@ impl ::std::fmt::Display for EvalError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         match self {
             &EvalError::Unknown =>
-                write!(f, "Unknown evaluation error"),
+                write!(f, "unknown evaluation error"),
             &EvalError::IO(ref e) =>
                 write!(f, "I/O error: {}", e),
             &EvalError::InvalidOperation(ref s) =>
-                write!(f, "Invalid operation: {}", s),
+                write!(f, "invalid operation: {}", s),
             &EvalError::TypeError(ref s) =>
-                write!(f, "Type error: {}", s),
+                write!(f, "type error: {}", s),
             &EvalError::Runtime(ref s) =>
-                write!(f, "Runtime error: {}", s),
+                write!(f, "runtime error: {}", s),
             &EvalError::Arity {got, expected} =>
-                write!(f, "Got {} arguments, expected {}", got, expected),
+                write!(f, "got {} arguments, expected {}", got, expected),
         }
     }
 }

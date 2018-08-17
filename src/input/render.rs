@@ -9,6 +9,9 @@ use environment::{empty, global};
 use editor::{LineEditor, EditingDiscipline};
 use completion::{EntryType, CompletionSet};
 
+// TODO: Add a way to compute display width rather than text width. Any user
+//       sequence which includes color/term ctl codes will currently throw the
+//       length calculation out of whack.
 /// Figure out what the left-hand prompt is
 fn get_lprompt() -> String {
     if let Some(obj) = global().get("user/left-prompt") {

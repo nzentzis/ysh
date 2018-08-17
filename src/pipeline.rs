@@ -269,8 +269,7 @@ impl TransformEvaluation {
             let res = match res {
                 Ok(r) => r,
                 Err(e) => {
-                    writeln!(io::stderr(),
-                    "ysh: {:?} - {}", expr, e).unwrap();
+                    writeln!(io::stderr(), "ysh: {}", e).unwrap();
                     return;
                 }
             };
