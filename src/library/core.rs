@@ -23,6 +23,12 @@ lazy_static! {
                With 2 arguments, evaluates value and modifies the global \
                environment binding the result to sym.");
 
+    static ref DOC_UNDEF: Documentation = Documentation::new()
+        .form(&["sym*"])
+        .short("Removes global symbol bindings")
+        .desc("For each argument, removes it from the global environment if \
+               it's present. Return a list of the removed values.");
+
     static ref DOC_DO: Documentation = Documentation::new()
         .form(&["forms*"])
         .short("Evaluate the passed forms in order and return the last value");
@@ -193,6 +199,24 @@ fn core_def(lex: &Environment, args: &[Value]) -> Eval<Value> {
         },
         _ => Eval::from(Err(EvalError::Arity {expected: 2, got: args.len()}))
     }
+}
+
+/// Undefine all input symbols
+fn core_undef(lex: &Environment, args: &[Value]) -> Eval<Value> {
+    let mut res = Vec::with_capacity(args.len());
+
+    for arg in args {
+        let sym = match arg.get_symbol().wait() {
+            Ok(Some(r)) => r,
+            _ => continue
+        };
+
+        if let Some(r) = global().unset(sym) {
+            res.push(r);
+        }
+    }
+
+    Eval::from(Ok(Value::list(res)))
 }
 
 /// Evaluate the argument forms in the order in which they were given
@@ -636,6 +660,8 @@ pub fn initialize() {
                               .document(&DOC_DO));
     env.set_immut("if", Value::from(Executable::CoreFn(core_if))
                               .document(&DOC_IF));
+    env.set_immut("undef", Value::from(Executable::CoreFn(core_def))
+                                 .document(&DOC_UNDEF));
 
     // macros and quoting
     env.set_immut("quote", Value::from(Executable::CoreFn(core_quote))

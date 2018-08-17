@@ -15,6 +15,13 @@ impl<'a> ExclusiveEnvironment<'a> {
     pub fn set<S: AsRef<str>>(&mut self, key: S, val: Value) {
         self.map.insert(String::from(key.as_ref()), val);
     }
+
+    /// Remove a mapping from the environment
+    /// 
+    /// If it's present, return its previous value.
+    pub fn unset<S: AsRef<str>>(&mut self, key: S) -> Option<Value> {
+        self.map.remove(key.as_ref())
+    }
 }
 
 #[derive(Clone)]
@@ -68,6 +75,11 @@ pub trait BindingProxy {
 
     /// Called when the user attempts to bind a new value
     fn set(&self, val: Value);
+
+    /// Called when the user attempts to unbind a value
+    /// 
+    /// By default, always fails.
+    fn unset(&self) -> Option<Value> { None }
 }
 
 #[derive(Clone)]
@@ -147,6 +159,28 @@ impl GlobalEnvironment {
                 v.insert(GlobalMapping { value: val, mutable });
             }
         }
+    }
+
+    /// Remove a mapping from the environment
+    /// 
+    /// If it's present, return its previous value.
+    pub fn unset<S: AsRef<str>>(&self, key: S) -> Option<Value> {
+        let mut w = self.mappings.write().unwrap();
+        // make sure the content is mutable before removing it, otherwise
+        // (undef undef) would break the interpreter
+        if let Some(entry) = w.get(key.as_ref()) {
+            if !entry.mutable { return None; }
+
+            // use proxy if present
+            if let GlobalMappingValue::Proxy(ref p) = entry.value {
+                return p.unset();
+            }
+        }
+
+        w.remove(key.as_ref()).and_then(|m| match m.value {
+            GlobalMappingValue::Literal(v) => Some(v),
+            GlobalMappingValue::Proxy(_)   => None,
+        })
     }
 
     pub fn set<K: AsRef<str>>(&self, key: K, val: Value) {
