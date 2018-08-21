@@ -170,6 +170,7 @@ impl environment::BindingProxy for PlanDebugProxy {
 fn init_environment() {
     library::initialize();
     completion::initialize();
+    history::initialize();
 
     let env = global();
     env.set("print", Value::from(Executable::native(|_, args| {
@@ -230,9 +231,6 @@ fn init_environment() {
 
     // create virtual environment map
     env.set_proxy("env", EnvProxy::new());
-
-    // create virtual history list
-    env.set_proxy("history", history::HistoryProxy{});
 
     if cfg!(debug_assertions) {
         env.set_proxy("plan-debug", PlanDebugProxy());

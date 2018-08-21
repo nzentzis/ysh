@@ -80,7 +80,7 @@ impl<T> Query<T> {
 /// A command which may be used by more than one entry in the history database
 ///
 /// For example, if you run `ls` twice, the database would contain two entries,
-/// one for each, but only one *command*, since both entries reference same
+/// one for each, but only one *command*, since both entries reference the same
 /// actual input.
 pub struct Command {
     pub structure: Pipeline,
@@ -91,7 +91,9 @@ impl Command {
     ///
     /// Return `None` if the command doesn't match or `Some(score)` if it does.
     fn match_text(&self, t: &str) -> Option<u32> {
-        None
+        let repr = self.structure.into_repr();
+
+        if repr.contains(t) { Some(1) } else { None }
     }
 
     /// Perform structural matching
@@ -289,11 +291,49 @@ impl Database {
 
 lazy_static! {
     static ref DB: Database = Database::new();
+    static ref DOC_QUERY: Documentation = Documentation::new()
+        .short("Query the history database")
+        .form(&["str"])
+        .form(&["other-form"])
+        .desc("When passed a string, performs a text search over the history \
+               database and returns the results. When passed a non-string \
+               value, performs a structural search and returns the rsults.");
 }
 
 /// Get a reference to the history database
 pub fn db() -> &'static Database {
     &DB
+}
+
+/// Instlal the history functions
+pub fn initialize() {
+    use environment;
+    use evaluate::Executable;
+
+    let env = environment::global();
+
+    // create virtual history list
+    env.set_proxy("history", HistoryProxy{});
+
+    // set up user functions
+    // TODO: allow sorting
+    env.set("history/query", Value::from(Executable::native(|env, args| {
+        if args.len() != 1 {
+            return Err(EvalError::Arity {
+                got: args.len(),
+                expected: 1
+            });
+        }
+
+        let query = &args[0];
+        let results = if let Some(s) = query.get_string().wait()? {
+            db().query_text(Query::new(s))
+        } else {
+            db().query_structural(Query::new(query.to_owned()))
+        };
+
+        Ok(Value::list(results.into_iter().map(|c| c.structure.into_obj())))
+    })));
 }
 
 #[cfg(test)]
